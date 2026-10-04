@@ -45,6 +45,32 @@ func run() -> void:
 				game._physics_process(1.0/60.0)
 			check(game.progress==before+1,"One cast cannot consume a following light")
 		check(game.chapter_done,"Every optional night can complete")
+	# Each duet must accept the same gesture from either side. Keep the
+	# smaller gestures unsuccessful so the pair still requires both echoes.
+	for duet_case in [{"chapter":1,"angles":[0.98,1.12]},{"chapter":4,"angles":[1.12,1.20]}]:
+		for target_index in range(2):
+			for direction in [-1.0,1.0]:
+				game._new_chapter(duet_case["chapter"])
+				game.progress = target_index
+				game.dragging = true
+				game.theta = direction * duet_case["angles"][target_index]
+				game._release()
+				check(not game.cast_judged,"Either duet release direction remains eligible")
+				for tick in range(300):
+					game._process(1.0/60.0)
+					game._physics_process(1.0/60.0)
+				check(game.progress==target_index+1,"Every duet target is reachable from either side")
+				check(game.duet_checked[0] and game.duet_checked[1] and game.duet_errors.max()<=0.095,"Both duet turns meet the unchanged hit tolerance")
+		for direction in [-1.0,1.0]:
+			game._new_chapter(duet_case["chapter"])
+			game.dragging = true
+			game.theta = direction * 0.5
+			game._release()
+			for tick in range(300):
+				game._process(1.0/60.0)
+				game._physics_process(1.0/60.0)
+			check(game.progress==0 and game.cast_judged,"Weak duet releases cannot award a pair from either side")
+			check(game.echoes[0]["cast_id"]!=game.casts and game.echoes[1]["cast_id"]!=game.casts,"Weak releases never reach the secondary moons")
 	game._new_chapter(3)
 	game.dragging = true
 	game.theta = 1.0

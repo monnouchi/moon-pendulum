@@ -397,7 +397,7 @@ func _goal_kind() -> String:
 
 func _echo_target(side: int) -> float:
 	if _goal_kind() == "duet":
-		return -absf(_target()) if side == 0 else absf(_target()) * 0.92
+		return (-1.0 if side == 0 else 1.0) * absf(_target()) * 0.96
 	return _target()
 
 func _goal_position() -> Vector2:
@@ -458,11 +458,6 @@ func _draw_echoes() -> void:
 				if has_last_echo_turn[side] and (not swinging or cast_judged or dragging):
 					var previous := _echo_point(side,last_echo_turns[side])
 					draw_arc(previous,6.0,0.0,TAU,20,Color(WHITE,0.50),1.0,true)
-		if not free_play and _goal_kind() in ["relay","duet"] and not chapter_done:
-			if _goal_kind()=="duet" or side==(0 if _target()<0 else 1):
-				_text("この月を光へ",ep+Vector2(0,-22),14,_tone_color("gold"),true)
-			if e["charged"]:
-				_text("鐘に力がたまる",ep+Vector2(0,el+65.0),13,MUTED,true)
 		if _pitch_labels_visible():
 			_text(("D4" if side==0 else "B4") if chapter<2 else ("F♯4" if side==0 else "D5"),ep+Vector2(0.0,el+45.0),11,MUTED,true)
 
@@ -781,11 +776,11 @@ func _release() -> void:
 	cast_judged = false
 	cast_seconds = 0.0
 	feedback = "月が光に届く、その一瞬を聴こう。" if not free_play else "鐘から振り子へ、あなたの音がつながる。"
+	feedback_timer = 3.0
 	if _goal_kind() in ["relay", "duet"]:
 		_reset_echoes()
 		feedback = "鐘から小さな月へ、力がつながっていく。"
-		var wanted_side := -1.0 if _goal_kind() == "duet" or _target() < 0.0 else 1.0
-		if signf(theta) != wanted_side:
+		if _goal_kind() == "relay" and signf(theta) != signf(_target()):
 			cast_judged = true
 			feedback = "光のある側から、放してみよう。"
 	_save()
@@ -850,11 +845,11 @@ func _retry(clear_cadence: bool = true) -> void:
 	if clear_cadence:
 		cadence_notes.clear()
 	feedback = "光の反対側へ引いて、もうひと振り。" if not free_play else "光のない夜を、好きな音で奏でよう。"
-	feedback_timer = 0.0
+	feedback_timer = 3.0
 	if _goal_kind() == "relay":
 		feedback = "光のある小さな月の側へ、もうひと振り。"
 	elif _goal_kind() == "duet":
-		feedback = "左から放して、二つの小さな月へ力を届けよう。"
+		feedback = "左でも右でも、二つの月へ。"
 	_publish_state()
 
 func _new_chapter(index: int) -> void:
@@ -880,7 +875,7 @@ func _new_chapter(index: int) -> void:
 	elif _goal_kind() == "relay":
 		feedback = "鐘から小さな月へ、力を届けよう。"
 	elif _goal_kind() == "duet":
-		feedback = "左からひと振りで、二つの月を光へ。"
+		feedback = "左でも右でも、二つの月を光へ。"
 
 func _toggle_mute() -> void:
 	muted = not muted
@@ -1158,9 +1153,6 @@ func _draw_sky_constellation() -> void:
 	if not started:
 		return
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
-	if not free_play:
-		var first := _sky_position(0)
-		_text("星がそろうと、この夜が完成。",Vector2(size.x*0.5,first.y+34.0 if size.x<900.0 else first.y-24.0),15,MUTED,true)
 	for i in range(count):
 		var pos := _sky_position(i)
 		var lit := garden_lights[i]>0.23 if free_play else i<progress
@@ -1360,24 +1352,8 @@ func _draw_score() -> void:
 		draw_circle(pos, 6.0, _tone_color("gold") if i < progress else Color("2d4a50"))
 		if i == progress and not chapter_done:
 			draw_arc(pos, 9.0, 0, TAU, 24, _tone_color("gold"), 1.0, true)
-	_text(feedback, Vector2(size.x * 0.5, card_y + 76.0), 20, WHITE, true)
-	var summary := "左右へドラッグ → 離す  /  ← → で調整、Space で放す"
-	if free_play:
-		summary = "引く強さと速さで、響きと光の広がりが変わる。"
-	elif chapter_done:
-		var unit := "組の光" if _goal_kind() == "duet" else "個の光"
-		summary = "%d %s · %d 回のひと振り · 澄んだ一音 %d 回" % [progress, unit, casts, perfects]
-	elif dragging:
-		summary = "引く大きさで、届く場所が変わる。"
-	elif swinging:
-		summary = "鐘は D メジャーの五音。月の動きが旋律になる。"
-		if chapter > 0:
-			summary = "左右の鐘から、もう一つの振り子へ音がつながる。"
-	if not chapter_done and _goal_kind() == "relay":
-		summary = "光は小さな月に。引く強さが、鐘で渡す力になる。"
-	elif not chapter_done and _goal_kind() == "duet":
-		summary = "左から放す。左右の鐘を通り、二つの光をつなぐ。"
-	_text(summary, Vector2(size.x * 0.5, card_y + 108.0), 15, MUTED, true)
+	if feedback_timer > 0.0:
+		_text(feedback, Vector2(size.x * 0.5, card_y + 76.0), 20, WHITE, true)
 
 func _draw_intro() -> void:
 	_button(start_rect,"奏でる",true)
@@ -1404,7 +1380,7 @@ func _draw_help() -> void:
 		lines[2] = "蓄えた力が、小さな月を揺らす。"
 		lines[5] = "光のある側から、少し大きく引いてみよう。"
 		if _goal_kind() == "duet":
-			lines[5] = "左から放して、左右の光をひと振りで。"
+			lines[5] = "左でも右でも、二つの光をひと振りで。"
 	if free_play:
 		lines[0] = "光の輪のない、自由な夜。"
 		lines[1] = "月を引いて放すと、鐘が歌う。"
