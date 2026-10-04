@@ -65,6 +65,14 @@ var pause_rect := Rect2()
 var stage_rect := Rect2()
 var best_chapters: Array = [0, 0, 0]
 var reduced_motion := false
+var echoes: Array[Dictionary] = []
+var chain_rings := 0
+var harmonic_time := 0.0
+var cadence_notes: Array[Dictionary] = []
+var free_play := false
+var tempo_index := 1
+const TEMPOS = [0.80, 1.0, 1.22]
+const TEMPO_NAMES = ["ゆっくり", "ふつう", "はやく"]
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -82,32 +90,43 @@ func _ready() -> void:
 		players.append(player)
 	_load_save()
 	_layout()
+	_reset_echoes()
 	if OS.has_feature("web"):
 		reduced_motion = bool(JavaScriptBridge.eval("window.matchMedia('(prefers-reduced-motion: reduce)').matches"))
 	get_viewport().size_changed.connect(_layout)
 	_publish_state()
 
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and started:
+		paused = true
+		dragging = false
+		_stop_audio()
+		_publish_state()
+
 func _layout() -> void:
 	size = get_viewport_rect().size
 	var portrait := size.y > size.x * 1.20
 	length = minf(size.x * 0.43, (size.y - 325.0) * 0.72)
-	pivot = Vector2(size.x * 0.5, 158.0 + maxf(0.0, size.y - 860.0) * 0.23)
-	if not portrait:
-		pivot.y = 139.0
-	stage_rect = Rect2(24.0, 112.0, size.x - 48.0, size.y - 350.0)
-	stage_rect.size.y = maxf(stage_rect.size.y, length + 115.0)
+	pivot = Vector2(size.x * 0.5, 139.0)
+	if portrait:
+		var stage_top := 142.0
+		var stage_bottom := size.y - 263.0
+		var spare := maxf(0.0, stage_bottom - stage_top - length - 102.0)
+		pivot.y = stage_top + spare * 0.60 + 32.0
+	stage_rect = Rect2(24.0, 112.0, size.x - 48.0, size.y - 369.0)
 	var bottom_y := size.y - 86.0
 	var bw := minf(220.0, (size.x - 92.0) / 3.0)
-	retry_rect = Rect2(size.x * 0.5 - bw - 8.0, bottom_y, bw, 52.0)
-	next_rect = Rect2(size.x * 0.5 + 8.0, bottom_y, bw, 52.0)
-	reset_rect = Rect2(28.0, 72.0, 100.0, 34.0)
-	mute_rect = Rect2(size.x - 144.0, 27.0, 112.0, 42.0)
-	help_rect = Rect2(size.x - 196.0, 27.0, 42.0, 42.0)
-	pause_rect = Rect2(size.x - 250.0, 27.0, 42.0, 42.0)
+	retry_rect = Rect2(size.x * 0.5 - bw - 8.0, bottom_y - 20.0, bw, 72.0)
+	next_rect = Rect2(size.x * 0.5 + 8.0, bottom_y - 20.0, bw, 72.0)
+	reset_rect = Rect2(28.0, 72.0, 100.0, 46.0)
+	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
+	help_rect = Rect2(size.x - 202.0, 20.0, 66.0, 66.0)
+	pause_rect = Rect2(size.x - 276.0, 20.0, 66.0, 66.0)
 	start_rect = Rect2(size.x * 0.5 - 156.0, size.y * 0.66, 312.0, 62.0)
 
 func _target() -> float:
-	if chapter_done:
+	if chapter_done or free_play:
 		return 0.0
 	return float(CHAPTERS[chapter]["targets"][progress])
 
@@ -116,8 +135,13 @@ func _point(angle: float, radius: float = -1.0) -> Vector2:
 	return pivot + Vector2(sin(angle), cos(angle)) * r
 
 func _process(delta: float) -> void:
-	if not paused:
+	if not paused and not show_help:
 		elapsed += delta
+		harmonic_time += delta
+		for note in cadence_notes.duplicate():
+			if harmonic_time >= float(note["at"]):
+				_sound(int(note["index"]), 0.72)
+				cadence_notes.erase(note)
 		for i in range(7):
 			bell_glows[i] = maxf(0.0, bell_glows[i] - delta * 1.1)
 			bell_cooldowns[i] = maxf(0.0, bell_cooldowns[i] - delta)
@@ -136,11 +160,14 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _physics_process(delta: float) -> void:
-	if not started or paused or show_help or dragging or not swinging:
+	if not started or paused or show_help:
+		return
+	_echo_physics(delta)
+	if dragging or not swinging:
 		return
 	var previous_theta := theta
 	var previous_omega := omega
-	omega += (-PHYSICS_RATE * sin(theta) - DAMPING * omega) * delta
+	omega += (-PHYSICS_RATE * pow(float(TEMPOS[tempo_index]), 2.0) * sin(theta) - DAMPING * omega) * delta
 	theta += omega * delta
 	cast_seconds += delta
 	if previous_theta * theta < 0.0:
@@ -165,12 +192,74 @@ func _ring(index: int, strength: float = 0.8) -> void:
 	bell_cooldowns[index] = 0.34
 	note_label = NOTE_NAMES[index]
 	_sound(index, strength)
+	# An outer bell winds a little escapement. The returning central bell
+	# releases it, so the echo is an actual second pendulum with its own motion.
+	if chapter > 0:
+		if index == 1:
+			echoes[0]["charged"] = true
+		elif index == 5:
+			echoes[1]["charged"] = true
+		elif index == 3:
+			for e in echoes:
+				if e["charged"]:
+					e["omega"] = clampf(float(e["omega"]) + (-1.0 if int(e["side"]) == 0 else 1.0) * (1.8 + strength * 1.4), -3.6, 3.6)
+					e["glow"] = 1.0
+					e["charged"] = false
 	var pos := _point(float(BELL_ANGLES[index]), length + 11.0)
 	ripples.append({"pos": pos, "age": 0.0, "strength": strength})
 	if not reduced_motion:
 		for i in range(5):
 			var a := float(i) * TAU / 5.0 + elapsed
 			particles.append({"pos": pos, "velocity": Vector2(cos(a), sin(a)) * 33.0, "life": 0.9, "color": TEAL})
+
+
+func _reset_echoes() -> void:
+	echoes = [
+		{"side":0, "theta":0.0, "omega":0.0, "charged":false, "glow":0.0, "cooldown":0.0},
+		{"side":1, "theta":0.0, "omega":0.0, "charged":false, "glow":0.0, "cooldown":0.0}
+	]
+	chain_rings = 0
+
+func _echo_pivot(side: int) -> Vector2:
+	return pivot + Vector2((-1.0 if side == 0 else 1.0) * length * 0.73, length * 0.11)
+
+func _echo_physics(delta: float) -> void:
+	for e in echoes:
+		var old: float = e["theta"]
+		e["omega"] += (-11.4 * sin(float(e["theta"])) - 0.50 * float(e["omega"])) * delta
+		e["theta"] += float(e["omega"]) * delta
+		e["glow"] = maxf(0.0, float(e["glow"]) - delta * 0.70)
+		e["cooldown"] = maxf(0.0, float(e["cooldown"]) - delta)
+		if old * float(e["theta"]) < 0.0 and absf(float(e["omega"])) > 0.25 and float(e["cooldown"]) <= 0.0:
+			e["cooldown"] = 0.28
+			e["glow"] = 1.0
+			chain_rings += 1
+			var index := 2 if int(e["side"]) == 0 else 5
+			if chapter == 2:
+				index = 4 if int(e["side"]) == 0 else 6
+			_sound(index, clampf(absf(float(e["omega"])) * 0.17, 0.25, 0.60))
+			ripples.append({"pos": _echo_pivot(int(e["side"])) + Vector2(0.0, length * 0.26), "age":0.0, "strength":0.6})
+
+func _draw_echoes() -> void:
+	if chapter == 0 or not started:
+		return
+	for e in echoes:
+		var side: int = e["side"]
+		var ep := _echo_pivot(side)
+		var el := length * 0.26
+		var bob := ep + Vector2(sin(float(e["theta"])), cos(float(e["theta"]))) * el
+		var glow: float = e["glow"]
+		var feed := _point(-0.66 if side == 0 else 0.66, length + 15.0)
+		var wire_color := GOLD if e["charged"] else Color("355358")
+		draw_line(feed, ep + Vector2(0.0, el + 20.0), Color(wire_color, 0.55), 1.0, true)
+		draw_line(ep + Vector2(0.0, el + 20.0), ep, Color(wire_color, 0.55), 1.0, true)
+		draw_arc(ep, el, PI*0.5-0.9, PI*0.5+0.9, 32, Color(0.39,0.62,0.59,0.12), 1.0, true)
+		draw_line(ep, bob, Color("80a497"), 1.0, true)
+		draw_circle(ep, 4.0, GOLD if e["charged"] else MUTED)
+		_glow(bob, 10.0, TEAL, glow * 1.3)
+		draw_circle(bob, 10.0, Color("6a9690").lerp(TEAL, glow))
+		draw_circle(bob + Vector2(3,-3), 7.0, Color("17363f"))
+		_text("A4" if side == 1 and chapter == 1 else ("D4" if chapter == 1 else ("F♯4" if side == 0 else "D5")), ep + Vector2(0.0, el + 45.0), 11, MUTED, true)
 
 func _sound(index: int, strength: float = 0.8) -> void:
 	if muted or not started or paused:
@@ -187,7 +276,7 @@ func _stop_audio() -> void:
 
 func _judge_turn() -> void:
 	cast_judged = true
-	if chapter_done:
+	if chapter_done or free_play:
 		return
 	var target := _target()
 	var error := absf(theta - target)
@@ -211,6 +300,7 @@ func _judge_turn() -> void:
 			var rating := 3 if casts <= progress + 1 else (2 if casts <= progress * 2 else 1)
 			best_chapters[chapter] = maxi(int(best_chapters[chapter]), rating)
 			_save()
+			cadence_notes = [{"at": harmonic_time + 0.2, "index": 0}, {"at": harmonic_time + 0.42, "index": 2}, {"at": harmonic_time + 0.64, "index": 4}, {"at": harmonic_time + 0.88, "index": 5}, {"at": harmonic_time + 1.12, "index": 6}]
 	else:
 		if signf(theta) != signf(target):
 			feedback = "光の反対側へ引いてから、放してみよう。"
@@ -252,7 +342,7 @@ func _release() -> void:
 	cast_crossed_center = false
 	cast_judged = false
 	cast_seconds = 0.0
-	feedback = "月が光に届く、その一瞬を聴こう。"
+	feedback = "月が光に届く、その一瞬を聴こう。" if not free_play else "鐘から振り子へ、あなたの音がつながる。"
 	_publish_state()
 
 func _start() -> void:
@@ -268,12 +358,16 @@ func _retry() -> void:
 	theta = 0.0
 	trail.clear()
 	_stop_audio()
-	feedback = "光の反対側へ引いて、もうひと振り。"
+	_reset_echoes()
+	cadence_notes.clear()
+	feedback = "光の反対側へ引いて、もうひと振り。" if not free_play else "光のない夜を、好きな音で奏でよう。"
 	feedback_timer = 0.0
 	_publish_state()
 
 func _new_chapter(index: int) -> void:
-	chapter = index
+	free_play = index == 3
+	chapter = 2 if free_play else index
+	tempo_index = 1
 	progress = 0
 	casts = 0
 	perfects = 0
@@ -282,6 +376,8 @@ func _new_chapter(index: int) -> void:
 	particles.clear()
 	ripples.clear()
 	_retry()
+	if free_play:
+		feedback = "光のない夜を、好きな音で奏でよう。"
 
 func _toggle_mute() -> void:
 	muted = not muted
@@ -312,17 +408,27 @@ func _input(event: InputEvent) -> void:
 				show_help = false
 			elif retry_rect.has_point(pos):
 				_new_chapter(chapter) if chapter_done else _retry()
-			elif chapter_done and next_rect.has_point(pos):
-				_new_chapter((chapter + 1) % CHAPTERS.size())
+			elif (chapter_done or free_play) and next_rect.has_point(pos):
+				_new_chapter(0 if free_play else chapter + 1)
 			elif reset_rect.has_point(pos):
-				_new_chapter(chapter)
+				if free_play:
+					tempo_index = (tempo_index + 1) % TEMPOS.size()
+				else:
+					_new_chapter(chapter)
 			elif stage_rect.has_point(pos) and not paused:
 				_begin_pull(pos)
 		else:
 			_release()
 	elif event is InputEventMouseMotion and dragging:
 		_update_pull(event.position)
-	elif event is InputEventKey and event.pressed and not event.echo:
+	elif event is InputEventKey and event.pressed:
+		if event.echo and event.keycode not in [KEY_LEFT, KEY_RIGHT]:
+			return
+		if show_help and event.keycode == KEY_ESCAPE:
+			show_help = false
+			return
+		if show_help and event.keycode not in [KEY_H, KEY_ESCAPE, KEY_M]:
+			return
 		if not started:
 			if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
 				_start()
@@ -339,8 +445,8 @@ func _input(event: InputEvent) -> void:
 			KEY_R:
 				_new_chapter(chapter) if chapter_done else _retry()
 			KEY_ENTER:
-				if chapter_done:
-					_new_chapter((chapter + 1) % CHAPTERS.size())
+				if chapter_done or free_play:
+					_new_chapter(0 if free_play else chapter + 1)
 			KEY_LEFT, KEY_RIGHT:
 				if not chapter_done and not paused:
 					if not dragging:
@@ -353,6 +459,10 @@ func _input(event: InputEvent) -> void:
 
 func _text(text: String, pos: Vector2, font_size: int, color: Color = WHITE, center: bool = false) -> void:
 	var x := pos.x
+	if center:
+		var available := size.x - 62.0
+		while font_size > 12 and FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > available:
+			font_size -= 1
 	if center:
 		x -= FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x * 0.5
 	draw_string(FONT, Vector2(x, pos.y), text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
@@ -385,17 +495,17 @@ func _draw() -> void:
 		return
 	_draw_background()
 	_draw_stage()
+	_draw_echoes()
 	_draw_header()
 	if started:
 		_draw_score()
 		_button(retry_rect, "もう一度" if chapter_done else "引き直す  R")
-		_button(next_rect, "余韻でもう一周" if chapter == 2 else "次の楽章へ", true, not chapter_done)
-		_text("GODOT 4.7.2  /  AN ORIGINAL 4BAND STUDY", Vector2(size.x * 0.5, size.y - 13.0), 11, Color("50717b"), true)
+		_button(next_rect, "楽章へ戻る" if free_play else ("余韻の庭へ" if chapter == 2 else "次の楽章へ"), true, not chapter_done and not free_play)
 	else:
 		_draw_intro()
 	if show_help and started:
 		_draw_help()
-	if paused and started:
+	if paused and started and not show_help:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.015, 0.03, 0.04, 0.78))
 		_text("ひと休み", Vector2(size.x * 0.5, size.y * 0.46), 38, GOLD, true)
 		_text("P または右上の ▶ で、夜を再開", Vector2(size.x * 0.5, size.y * 0.46 + 47.0), 21, WHITE, true)
@@ -442,9 +552,7 @@ func _draw_header() -> void:
 		_button(mute_rect, "音 OFF" if muted else "音 ON")
 		_button(help_rect, "？")
 		_button(pause_rect, "▶" if paused else "Ⅱ")
-		_text("最初から", Vector2(38.0, 96.0), 14, MUTED)
-	else:
-		_text("4BAND / INTERACTIVE STUDY 08", Vector2(size.x - 286.0, 51.0), 12, MUTED, false)
+		_text(TEMPO_NAMES[tempo_index] + " ↻" if free_play else "最初から", Vector2(38.0, 96.0), 14, MUTED)
 
 func _draw_stage() -> void:
 	var arc_color := Color(0.38, 0.6, 0.59, 0.14)
@@ -471,7 +579,7 @@ func _draw_stage() -> void:
 		draw_line(pos + Vector2(-11,7), pos + Vector2(11,7), Color("a9b69b").lerp(WHITE, glow), 1.5)
 		draw_circle(pos + Vector2(0,10), 2.0, GOLD)
 		_text(NOTE_NAMES[i], pos + Vector2(0, 35), 11, MUTED, true)
-	if started and not chapter_done:
+	if started and not chapter_done and not free_play:
 		var target := _target()
 		var target_pos := _point(target)
 		var pulse := 0.75 + sin(elapsed * 2.5) * 0.15
@@ -516,8 +624,8 @@ func _draw_score() -> void:
 	var card_y := size.y - 245.0
 	var card := Rect2(28.0, card_y, size.x - 56.0, 137.0)
 	_panel(card, Color(0.045, 0.12, 0.15, 0.82), Color("29454d"), 16.0)
-	_text(CHAPTERS[chapter]["name"], Vector2(49.0, card_y + 34.0), 23, GOLD)
-	var total: int = CHAPTERS[chapter]["targets"].size()
+	_text("余韻の庭" if free_play else CHAPTERS[chapter]["name"], Vector2(49.0, card_y + 34.0), 23, GOLD)
+	var total: int = 0 if free_play else CHAPTERS[chapter]["targets"].size()
 	for i in range(total):
 		var pos := Vector2(size.x - 57.0 - float(total - 1 - i) * 26.0, card_y + 27.0)
 		draw_circle(pos, 6.0, GOLD if i < progress else Color("2d4a50"))
@@ -525,12 +633,16 @@ func _draw_score() -> void:
 			draw_arc(pos, 9.0, 0, TAU, 24, GOLD, 1.0, true)
 	_text(feedback, Vector2(size.x * 0.5, card_y + 76.0), 20, WHITE, true)
 	var summary := "左右へドラッグ → 離す  /  ← → で調整、Space で放す"
-	if chapter_done:
+	if free_play:
+		summary = "回数も目標もなし。左上で振り子の速さを変えられる。"
+	elif chapter_done:
 		summary = "%d 個の光 · %d 回のひと振り · 澄んだ一音 %d 回" % [progress, casts, perfects]
 	elif dragging:
 		summary = "引く大きさで、届く場所が変わる。"
 	elif swinging:
 		summary = "鐘は D メジャーの五音。月の動きが旋律になる。"
+		if chapter > 0:
+			summary = "左右の鐘から、もう一つの振り子へ音がつながる。"
 	_text(summary, Vector2(size.x * 0.5, card_y + 108.0), 15, MUTED, true)
 
 func _draw_intro() -> void:
@@ -550,6 +662,11 @@ func _draw_help() -> void:
 	var y := size.y * 0.26
 	_text("月の奏で方", Vector2(cx,y), 34,GOLD,true)
 	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "薄い緑の輪は、放す場所の目安。", "失敗しても音は残る。何度でも奏でよう。", "", "← →：角度を調整　Space：放す", "R：引き直す　M：ミュート　P：一時停止"]
+	if free_play:
+		lines[0] = "光の輪のない、自由な夜。"
+		lines[1] = "月を引いて放すと、鐘が歌う。"
+		lines[2] = "左上で速さを変えて、音を奏で分けよう。"
+		lines[5] = "鐘から副振り子へ、音がつながる。"
 	for i in range(lines.size()):
 		_text(lines[i],Vector2(cx,y+54.0+float(i)*34.0),20,WHITE,true)
 	_text("どこかをタップして閉じる / H",Vector2(cx,y+440.0),17,MUTED,true)
@@ -571,5 +688,5 @@ func _save() -> void:
 func _publish_state() -> void:
 	# A read-only public QA snapshot. It cannot alter gameplay or storage.
 	if OS.has_feature("web"):
-		var state := {"started":started,"chapter":chapter,"progress":progress,"casts":casts,"complete":chapter_done,"muted":muted,"engine":Engine.get_version_info()["string"]}
+		var state := {"started":started,"chapter":chapter,"progress":progress,"casts":casts,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"engine":Engine.get_version_info()["string"]}
 		JavaScriptBridge.eval("window.moonPendulumState = " + JSON.stringify(state) + ";")
