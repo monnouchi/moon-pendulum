@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 20
     env:
       GODOT_VERSION: 4.7.2
-      XDG_DATA_HOME: ${{ runner.temp }}/godot-data
+      XDG_DATA_HOME: /tmp/moon-pendulum-godot-data
     steps:
       - name: Check out game source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
