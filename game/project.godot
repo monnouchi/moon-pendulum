@@ -1,0 +1,29 @@
+; Godot 4.7.2 standard / GDScript. Source of Moon Pendulum.
+config_version=5
+
+[application]
+config/name="月の振り子 · Moon Pendulum"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://assets/icon.svg"
+
+[display]
+window/size/viewport_width=720
+window/size/viewport_height=760
+window/size/window_width_override=1152
+window/size/window_height_override=912
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.025, 0.05, 0.075, 1)
+
+[audio]
+general/default_playback_type.web=1
+
+[input_devices]
+pointing/emulate_mouse_from_touch=true
+pointing/emulate_touch_from_mouse=false

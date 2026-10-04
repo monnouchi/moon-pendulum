@@ -1,0 +1,86 @@
+name: Build and publish Moon Pendulum
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: moon-pendulum-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GODOT_VERSION: 4.7.2
+      XDG_DATA_HOME: ${{ runner.temp }}/godot-data
+    steps:
+      - name: Check out game source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download and verify official Godot standard and Web templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          BASE="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          curl --fail --location --retry 3 "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -o godot.zip
+          curl --fail --location --retry 3 "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -o templates.tpz
+          echo "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  godot.zip" | sha256sum -c -
+          echo "f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  templates.tpz" | sha256sum -c -
+          unzip -q godot.zip -d godot-bin
+          chmod +x "godot-bin/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          echo "$RUNNER_TEMP/godot-bin" >> "$GITHUB_PATH"
+          unzip -q templates.tpz 'templates/web*.zip' 'templates/version.txt'
+          mkdir -p "$XDG_DATA_HOME/godot/export_templates/${GODOT_VERSION}.stable"
+          mv templates/* "$XDG_DATA_HOME/godot/export_templates/${GODOT_VERSION}.stable/"
+      - name: Build original audio and font assets
+        run: python3 tools/build_assets.py
+      - name: Import Godot project and validate all gameplay goals
+        shell: bash
+        run: |
+          set -euo pipefail
+          GODOT="Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          "$GODOT" --version
+          "$GODOT" --headless --path game --editor --import --quit
+          "$GODOT" --headless --path game --script res://tests/test_game.gd
+      - name: Export single-thread Compatibility Web game
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p docs
+          "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --export-release Web "${GITHUB_WORKSPACE}/docs/index.html"
+          test -s docs/index.html && test -s docs/index.js && test -s docs/index.wasm && test -s docs/index.pck
+          touch docs/.nojekyll
+      - name: Upload downloadable Web export
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: moon-pendulum-web
+          path: docs
+          if-no-files-found: error
+          retention-days: 14
+      - name: Package GitHub Pages game
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish the generated game to enabled GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
