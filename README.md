@@ -1,38 +1,42 @@
 # 月の振り子 · Moon Pendulum
 
-夜を、ひと振り。月を引いて放つと、鐘と光が音楽を奏でる。
-4band の Godot 4.7.2 通常版 + GDScript 製 Web ゲーム。
+夜を、ひと振り。月を引いて放すと、鐘の響きが星と水面に光を広げる。
+4band の Godot 4.7.2 通常版 + GDScript 製インタラクティブ音楽作品。
 
-- 5つの楽章、19課題・22の光。ひと振りの大きさと連鎖する力を学ぶ
-- 7つの鐘は D メジャーの五音。音・残響・ベクターアートは本作向けに制作
-- マウス / タッチ / キーボード。回数制限なし、いつでも引き直せる
-- 音はスタート操作後に有効。ミュートと一時停止に対応
-- 第二・第三楽章では、鐘 → 仕掛け → 副振り子の物理的な連鎖が響く
-- 第四楽章は小さな副振り子を狙い、第五楽章は左右の光をひと振りでつなぐ
-- 自由演奏の「余韻の庭」へ。第三楽章から寄り道でき、振り子の速さを変えて奏でられる
-- 楽章のクリアを端末内に保存し、次の起動では夜のつづきから再開
+## 奏でる
 
-## 遊ぶ
+https://monnouchi.github.io/demo8/
 
-公開後の URL: https://monnouchi.github.io/demo8/
+「音と光の夜をはじめる」で、自由に奏でる庭へ。
+月を左右へ引いて放す。強さによって鳴る鐘と光の広がりが変わる。
+左上で振り子の速さ、右下で「蒼の夜 / 灯りの夜 / 白む夜」の色と音色を変えられる。
 
-月を光の輪と**反対側**へ引いて、離す。薄い緑の輪が放す場所の目安。
-小さく引けば近くへ、大きく引けば遠くへ届く。
+- 三つのオリジナル音色。左右の鐘と小さな副振り子が、立体的な響きをつなぐ
+- D メジャーの五音 D / E / F♯ / A / B。移動する月が旋律を生む
+- 引いている間の柔らかな音、離した後の響き、伸びる光の軌跡、水面の反射
+- 日本語明朝、マウス / タッチ / キーボード、ミュートと一時停止
+- 音は最初の操作後に有効。タブ・アプリを離れると音を止める
 
-キーボード: ← → で角度調整、Space で放す、R で引き直し、M でミュート、P で一時停止、H で説明。
+キーボード: ← → 長押しで調整、Space で放す、R で引き直し、M でミュート、P で一時停止、H で説明、庭では N で夜の色と音色。
+
+「星を灯す遊び」は任意の短い旅。金の輪で月を折り返すと、上の星座が灯る。
+常時の正解位置ガイドはなく、前の折り返しと届け先を見比べて試せる。
+最初の夜から、主振り子 → 鐘 → 小さな月の連鎖を体験できる。
+5つの夜、11課題・15の光。途中でも庭へ寄り道し、続きへ戻れる。
+クリアと途中の状態は端末内に保存。最初から遊ぶ操作は説明画面に分けている。
 
 ## GitHub Pages
 
 1. Repository Settings → Pages → Source を **GitHub Actions** に設定する
-2. Actions → **Build and publish Moon Pendulum** → Run workflow を実行する（または次の main push を待つ）
+2. Actions → **Build and publish Moon Pendulum** → Run workflow（または main push）
 
-Pages のリポジトリ設定はワークフローでは変更しません。
-設定前でもビルドとテスト、ダウンロードできる `moon-pendulum-web` 成果物の生成まで実行します。
-設定前の deploy ステップは GitHub Pages が有効でないため失敗することがあります。
+リポジトリの Pages 設定はワークフローで変更しない。
+設定前もビルド・テスト・ダウンロード用 `moon-pendulum-web` を生成する。
+成果物は1日保持。公式 Godot の配布物と公式 GitHub Actions を固定 SHA で使用。
 
 ## ローカル制作
 
-Godot **4.7.2 standard** と同じバージョンの Export Templates、Python 3 が必要。
+Godot **4.7.2 standard** と同バージョンの Export Templates、Python 3。
 
 ```sh
 python tools/build_assets.py
@@ -40,7 +44,7 @@ godot --headless --path game --editor --import --quit
 godot --path game
 ```
 
-Web 書き出しと確認:
+Web:
 
 ```sh
 mkdir -p docs
@@ -48,12 +52,10 @@ godot --headless --path game --export-release Web docs/index.html
 python -m http.server 8000 --directory docs
 ```
 
-http://localhost:8000 を開く。ファイルを直接開く方法には対応していません。
-WebGL 2.0 と WebAssembly が必要です。
-Compatibility renderer / single-thread export のため、COOP・COEP ヘッダー不要。
-公式 Web Audio sample playback を使用し、低遅延再生に対応します。
-初回読み込みには公式 Godot エンジン約38MBが含まれます。
-タブ・アプリを離れた際は一時停止し、音を止めます。戻ったら P / ▶ で再開できます。
+http://localhost:8000 を開く。ファイルの直接起動には対応していない。
+Compatibility / single-thread Web export、WebGL 2.0 + WebAssembly。
+COOP・COEP ヘッダー不要。Web Audio sample playback、残響と立体感は音源に焼き込んでいる。
+初回は公式 Godot エンジン約38MBを含む。
 
 ## テスト
 
@@ -61,18 +63,17 @@ Compatibility renderer / single-thread export のため、COOP・COEP ヘッダ�
 godot --headless --path game --script res://tests/test_game.gd
 ```
 
-97項目: 全5楽章の到達、力の受け渡しと二つの副振り子、方向と引き不足のヒント、再判定防止、自由演奏、連続キー調整、再挑戦、中断、一時停止、UIサイズ、同梱文字を確認。
-テストはプレイヤーのクリア記録を上書きしません。
-実機の描画・タッチ・音声は各ブラウザで別途確認してください。
+84項目: 任意の全11課題の到達、連鎖、自由演奏の光、途中/完了後の庭への寄り道、再開、音色切替、キー調整、中断と説明、ミュート、文字、UIサイズ。
+テストはプレイヤーの記録を上書きしない。描画・実機タッチ・耳での確認は別途ブラウザ QA が必要。
 
 ## 構成とライセンス
 
-`game/` が Godot ソース。`tools/build_assets.py` がオリジナル音源と同梱フォントを再構築。
-`docs/` は生成される Web 書き出しで、Git には含めず Actions artifact として配布。
-GitHub Actions は公式 Godot 配布物を SHA-256 で検証してから使用。
+`game/` がソース。`tools/build_assets.py` がオリジナルのステレオ音源と同梱フォントを再構築。
+`docs/` は生成される Web export。Git に含めず Actions artifact として配布。
+公開成果物に本作・フォント・Godot/依存ライブラリのライセンスを同梱。
 
-コード・独自のアートと音源: MIT。
-Noto Sans CJK の同梱サブセット: SIL Open Font License 1.1（game/assets/fonts/LICENSE.txt）。
-Godot エンジン: MIT（https://godotengine.org/license/）。
+コード・独自アートと音源: MIT。
+Noto Serif CJK 日本語明朝サブセット: SIL Open Font License 1.1（game/assets/fonts/LICENSE.txt）。
+Godot: MIT（https://godotengine.org/license/）。
 
 [Godot Web export documentation](https://docs.godotengine.org/en/stable/tutorials/export/exporting_for_web.html)

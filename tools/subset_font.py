@@ -1,5 +1,5 @@
 """Developer utility: regenerate the bundled font after adding Japanese copy.
-Usage: python tools/subset_font.py /path/to/NotoSansCJK-Regular.ttc
+Usage: python tools/subset_font.py /path/to/NotoSerifCJK-Regular.ttc
 Requires the official fonttools Python package. Normal builds do not need it.
 """
 from pathlib import Path
@@ -24,16 +24,16 @@ subsetter.populate(text=text)
 subsetter.subset(font)
 # Rename this modified subset while retaining the upstream licensing records.
 for record in font['name'].names:
-    names = {1:'Moon Sans', 2:'Regular', 3:'MoonSans-Regular-2026', 4:'Moon Sans Regular', 6:'MoonSans-Regular'}
+    names = {1:'Moon Serif', 2:'Regular', 3:'MoonSerif-Regular-2026', 4:'Moon Serif Regular', 6:'MoonSerif-Regular'}
     if record.nameID in names:
         record.string = names[record.nameID].encode(record.getEncoding())
 if 'CFF ' in font:
     cff = font['CFF '].cff
-    cff.fontNames[0] = 'MoonSans-Regular'
+    cff.fontNames[0] = 'MoonSerif-Regular'
     top = cff.topDictIndex[0]
-    top.FullName = 'Moon Sans Regular'
-    top.FamilyName = 'Moon Sans'
-output = root/'game/assets/fonts/MoonSans.ttf' 
+    top.FullName = 'Moon Serif Regular'
+    top.FamilyName = 'Moon Serif'
+output = root/'game/assets/fonts/MoonSans.ttf'
 font.save(output)
 (output.with_name(output.name+'.b64')).write_text(base64.b64encode(output.read_bytes()).decode()+'\n')
 print(f'Updated {output.name}: {output.stat().st_size:,} bytes')

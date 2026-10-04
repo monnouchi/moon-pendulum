@@ -1,5 +1,5 @@
-Noto Sans CJK Japanese (subset for Moon Pendulum)
-Embedded font copyright: © 2014-2021 Adobe (http://www.adobe.com/).
+Noto Serif CJK Japanese (subset for Moon Pendulum)
+Embedded font copyright: © 2017-2024 Adobe (http://www.adobe.com/).
 Upstream distribution copyright: 2010-2012 Google Corporation
 Source: https://github.com/notofonts/noto-cjk
 

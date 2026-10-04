@@ -18,7 +18,9 @@ func run() -> void:
 	root.add_child(game)
 	check(not game.started, "Audio starts behind a user gesture")
 	game.testing = true
-	game.best_chapters = [0, 0, 0, 0, 0]
+	game.best_chapters = [0,0,0,0,0]
+	game.journey_resume = {}
+	game.garden_scene = {}
 	game.muted = true
 	game._start()
 	check(game.started, "Start gesture enters play")
@@ -26,29 +28,10 @@ func run() -> void:
 	check(absf(game.theta) <= game.MAX_PULL, "Drag cannot exceed physical angle limit")
 	game._retry()
 	check(game.theta == 0.0 and not game.swinging, "Retry restores stationary moon")
-	for chapter_index in range(3):
+	var solutions := [[-0.58,0.85,1.0],[-0.98,-1.12],[0.98,-1.05],[-1.13,1.20],[-1.12,-1.20]]
+	for chapter_index in range(game.CHAPTERS.size()):
 		game._new_chapter(chapter_index)
-		var targets: Array = game.CHAPTERS[chapter_index]["targets"]
-		for target in targets:
-			var before: int = game.progress
-			game.dragging = true
-			game.theta = -float(target) * 1.055
-			game._release()
-			for tick in range(200):
-				game._process(1.0 / 60.0)
-				game._physics_process(1.0 / 60.0)
-			check(game.progress == before + 1, "Correct opposite-side pull reaches target")
-			check(game.cast_judged, "One judgment per cast")
-			for tick in range(250):
-				game._process(1.0 / 60.0)
-				game._physics_process(1.0 / 60.0)
-			check(game.progress == before + 1, "Repeated turns do not collect extra targets")
-		check(game.chapter_done, "Each chapter can be completed")
-		check(game.casts == targets.size(), "All goals are achievable without hidden extra casts")
-	var advanced_angles := [[-1.0, 1.13, -1.20, 1.05], [-0.98, -1.12, -1.20]]
-	for chapter_index in [3,4]:
-		game._new_chapter(chapter_index)
-		for angle in advanced_angles[chapter_index-3]:
+		for angle in solutions[chapter_index]:
 			var before: int = game.progress
 			game.dragging = true
 			game.theta = angle
@@ -56,12 +39,12 @@ func run() -> void:
 			for tick in range(300):
 				game._process(1.0/60.0)
 				game._physics_process(1.0/60.0)
-			check(game.progress == before+1, "Advanced light is reachable through the physical relay")
+			check(game.progress==before+1,"Every optional journey light is reachable")
 			for tick in range(240):
 				game._process(1.0/60.0)
 				game._physics_process(1.0/60.0)
-			check(game.progress == before+1, "Relay cannot award repeated goals from one cast")
-		check(game.chapter_done, "Advanced chapter can be completed")
+			check(game.progress==before+1,"One cast cannot consume a following light")
+		check(game.chapter_done,"Every optional night can complete")
 	game._new_chapter(3)
 	game.dragging = true
 	game.theta = 1.0
@@ -82,7 +65,8 @@ func run() -> void:
 	game.best_chapters = [1,1,1,1,1]
 	check(game._resume_chapter() == game.CHAPTERS.size(), "Completed campaign resumes in the performance garden")
 	game._new_chapter(1)
-	game._ring(1, 0.8)
+	game.omega = 2.0
+	game._ring(1,0.8)
 	check(game.echoes[0]["charged"], "Outer bell winds a side escapement")
 	game._ring(3, 0.8)
 	check(not game.echoes[0]["charged"] and absf(game.echoes[0]["omega"]) > 1.0, "Returning middle bell releases the side pendulum")
@@ -166,6 +150,96 @@ func run() -> void:
 	close_key.pressed = true
 	game._input(close_key)
 	check(not game.show_help and not game.paused, "Escape closes help without stacking pause")
+	game._begin_pull(game.pivot + Vector2(-150,200))
+	var casts_before_help: int = game.casts
+	game._input(help_key)
+	check(game.show_help and not game.dragging and game.theta == 0.0, "Opening help cancels an active pull")
+	game._release()
+	check(game.casts == casts_before_help and not game.swinging, "Help cannot launch or consume an attempt behind overlay")
+	var hidden_click := InputEventMouseButton.new()
+	hidden_click.button_index = MOUSE_BUTTON_LEFT
+	hidden_click.pressed = true
+	hidden_click.position = game.pause_rect.get_center()
+	game._input(hidden_click)
+	check(not game.show_help and not game.paused, "Click-anywhere help dismissal cannot trigger hidden pause control")
+	game._begin_pull(game.pivot + Vector2(-150,200))
+	var pause_key := InputEventKey.new()
+	pause_key.keycode = KEY_P
+	pause_key.pressed = true
+	game._input(pause_key)
+	check(game.paused and not game.dragging, "Pause cancels an active pull")
+	game._release()
+	check(game.casts == casts_before_help, "Paused release cannot consume a hidden attempt")
+	hidden_click.position = game.reset_rect.get_center()
+	var preserved_progress: int = game.progress
+	game._input(hidden_click)
+	check(game.progress == preserved_progress and game.paused, "Hidden controls do not activate through pause")
+	game._input(pause_key)
+	check(not game.paused, "Pause can resume with its documented key")
+	game._start_art()
+	check(game.free_play and not game.chapter_done,"Main entrance opens expressive garden without mandatory tasks")
+	game.dragging = true
+	game.theta = -1.0
+	game._release()
+	for tick in range(240):
+		game._process(1.0/60.0)
+		game._physics_process(1.0/60.0)
+	check(game.garden_energy>0.05 and game.garden_lights.max()>0.2,"A gesture grows light in sky and water")
+	var palette_before: int = game.palette_index
+	game._cycle_palette()
+	check(game.palette_index==(palette_before+1)%3,"Night changes both palette and timbre bank")
+	game._new_chapter(2)
+	game.progress = game.CHAPTERS[2]["targets"].size()
+	game.chapter_done = true
+	game._enter_garden()
+	game._return_to_journey()
+	check(game.chapter==3 and game.progress==0,"Garden detour returns after completed third night, not to first")
+	game._new_chapter(0)
+	game.progress = 1
+	game.casts = 2
+	game._enter_garden()
+	game._return_to_journey()
+	check(game.chapter==0 and game.progress==1 and game.casts==2,"An unfinished night survives an artistic detour")
+	game._return_to_journey(true)
+	check(game.chapter==0 and game.progress==0,"Starting over is an explicit separate choice")
+	game._new_chapter(3)
+	game.dragging = true
+	game.theta = -0.5
+	game._release()
+	for tick in range(240):
+		game._process(1.0/60.0)
+		game._physics_process(1.0/60.0)
+	check(game.cast_judged and game.feedback.contains("外側"),"Weak relay has an actionable outer-bell hint")
+	game._new_chapter(1)
+	game.dragging = true
+	game.theta = -0.68
+	game._release()
+	for tick in range(240):
+		game._process(1.0/60.0)
+		game._physics_process(1.0/60.0)
+	check(game.cast_judged and game.feedback.contains("外側"),"Partial duet cannot wait forever for an unreachable second bell")
+	game._new_chapter(1)
+	game.dragging = true
+	game.theta = -1.05
+	game._release()
+	for tick in range(300):
+		game._process(1.0/60.0)
+		game._physics_process(1.0/60.0)
+	check(game.progress==1 and game.perfects==0,"Duet perfect requires both echoes within the tighter tolerance")
+	game._new_chapter(0)
+	game.reduced_motion = true
+	game._award_goal(0.01,game._point(0.55))
+	check(game.particles.is_empty() and game.light_flights.is_empty(),"Reduced motion removes decorative success movement")
+	game.reduced_motion = false
+	game._new_chapter(0)
+	game._input(held)
+	game._advance_keyboard_aim(0.5,-1.0)
+	var keyboard_angle: float = game.theta
+	var pointer := InputEventMouseMotion.new()
+	pointer.position = game._point(0.8)
+	game._input(pointer)
+	check(game.theta==keyboard_angle,"Mouse motion cannot hijack keyboard aiming")
+	game._retry()
 	var missing_glyphs: Array[String] = []
 	var source_text := FileAccess.get_file_as_string("res://scripts/main.gd")
 	for ch in source_text:
@@ -183,6 +257,6 @@ func run() -> void:
 		var scale: float = float(resolution.x) / game.size.x
 		check(game.retry_rect.size.y * scale >= 44.0, "Portrait retry touch target is at least 44 physical pixels")
 	root.size = original_size
-	print("PASS: %d gameplay checks, all 19 exercises / 22 lights across 5 chapters" % checks)
+	print("PASS: %d gameplay checks, all 11 optional exercises / 15 lights across 5 nights" % checks)
 	game.queue_free()
 	quit(0)

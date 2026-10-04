@@ -11,3 +11,6 @@
 
 /game/build_info.gd
 /game/build_info.gd.uid
+
+__pycache__/
+*.py[cod]
