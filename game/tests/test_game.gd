@@ -362,6 +362,19 @@ func run() -> void:
 	check(not sounding,"Explicit mute stops every voice after a short anti-click ramp")
 	game._new_chapter(0)
 	game._stop_audio(true)
+	game._new_chapter(game.CHAPTERS.size())
+	check(not game._moon_hint().is_empty() and not game._pitch_labels_visible(),"The initial gesture hint has no note labels underneath")
+	game.dragging = true
+	game.theta = 1.0
+	check(game._moon_hint()=="離す" and not game._pitch_labels_visible(),"A held outer moon cannot overlap the D5 label")
+	game.theta = -1.0
+	check(game._moon_hint()=="離す" and not game._pitch_labels_visible(),"The same gesture priority applies on the left")
+	game._release()
+	check(game._moon_hint().is_empty() and game._pitch_labels_visible(),"Note names return after release")
+	game.swinging = false
+	check(game._moon_hint().is_empty() and game._pitch_labels_visible(),"A familiar free garden stays quiet after settling")
+	game._new_chapter(0)
+	check(not game._moon_hint().is_empty() and not game._pitch_labels_visible(),"Journey gesture instructions also take priority over pitch names")
 	var missing_glyphs: Array[String] = []
 	var source_text := FileAccess.get_file_as_string("res://scripts/main.gd")
 	for ch in source_text:

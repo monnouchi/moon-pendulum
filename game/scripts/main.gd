@@ -463,7 +463,8 @@ func _draw_echoes() -> void:
 				_text("この月を光へ",ep+Vector2(0,-22),14,_tone_color("gold"),true)
 			if e["charged"]:
 				_text("鐘に力がたまる",ep+Vector2(0,el+65.0),13,MUTED,true)
-		_text(("D4" if side==0 else "B4") if chapter<2 else ("F♯4" if side==0 else "D5"),ep+Vector2(0.0,el+45.0),11,MUTED,true)
+		if _pitch_labels_visible():
+			_text(("D4" if side==0 else "B4") if chapter<2 else ("F♯4" if side==0 else "D5"),ep+Vector2(0.0,el+45.0),11,MUTED,true)
 
 func _tone_color(key: String) -> Color:
 	var a: Color = palette_origin.get(key,PALETTES[palette_from][key])
@@ -1265,6 +1266,19 @@ func _draw_header() -> void:
 		if reset_rect.size.x>0.0:
 			_button(reset_rect,GRAVITY_NAMES[gravity_index] if free_play else "庭へ")
 
+func _moon_hint() -> String:
+	if not started:
+		return ""
+	if dragging:
+		return "離す"
+	if not swinging and not chapter_done and (not free_play or casts==0):
+		return "← 左へ引いて、離す" if chapter==0 and progress==0 and casts==0 and not free_play else "月を引いて、離す"
+	return ""
+
+func _pitch_labels_visible() -> bool:
+	# A note name must not sit behind the nearby gesture instruction.
+	return started and _moon_hint().is_empty()
+
 func _draw_stage() -> void:
 	var arc_color := Color(0.38, 0.6, 0.59, 0.14)
 	draw_arc(pivot, length, PI * 0.5 - MAX_PULL, PI * 0.5 + MAX_PULL, 80, arc_color, 1.3, true)
@@ -1289,7 +1303,7 @@ func _draw_stage() -> void:
 		draw_colored_polygon(points, Color("446a6b").lerp(_tone_color("teal"), glow))
 		draw_line(pos + Vector2(-11,7), pos + Vector2(11,7), Color("a9b69b").lerp(WHITE, glow), 1.5)
 		draw_circle(pos + Vector2(0,10), 2.0, _tone_color("gold"))
-		if started:
+		if _pitch_labels_visible():
 			_text(NOTE_NAMES[i], pos + Vector2(0, 35), 11, MUTED, true)
 	if started and not chapter_done and _goal_kind() == "main":
 		var target := _target()
@@ -1320,9 +1334,10 @@ func _draw_stage() -> void:
 	draw_circle(pivot, 2.0, INK)
 	if dragging:
 		draw_arc(moon, 38.0, 0, TAU, 48, Color(0.64,0.89,0.82,0.4), 1.0, true)
-		_text("離す", moon + Vector2(0, 59), 16, WHITE, true)
-	elif started and not swinging and not chapter_done and (not free_play or casts==0):
-		_text("← 左へ引いて、離す" if chapter==0 and progress==0 and casts==0 and not free_play else "月を引いて、離す",Vector2(moon.x,minf(moon.y+61.0,size.y-266.0)),17,MUTED,true)
+	var hint := _moon_hint()
+	if not hint.is_empty():
+		var where := moon+Vector2(0,59) if dragging else Vector2(moon.x,minf(moon.y+61.0,size.y-266.0))
+		_text(hint,where,16 if dragging else 17,WHITE if dragging else MUTED,true)
 	for p in particles:
 		var c: Color = p["color"]
 		c.a = clampf(float(p["life"]), 0.0, 1.0) * 0.8
