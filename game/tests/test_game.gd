@@ -240,6 +240,25 @@ func run() -> void:
 	game._input(pointer)
 	check(game.theta==keyboard_angle,"Mouse motion cannot hijack keyboard aiming")
 	game._retry()
+	var checkpoint := {"version":1,"revision":12,"muted":true,"palette":2,"journey":{"chapter":3,"progress":1,"casts":3,"perfects":1},"garden":{"lights":[0.1,0.2,0.3,0.4,0.5,0.6,0.7],"energy":0.73},"best":[1,1,1,0,0]}
+	var restored: ConfigFile = game._config_from_checkpoint(JSON.parse_string(JSON.stringify(checkpoint)))
+	check(restored!=null and restored.get_value("meta","revision")==12,"Versioned JSON checkpoint restores its revision")
+	check(restored.get_value("journey","resume")["progress"]==1 and restored.get_value("garden","scene")["lights"].size()==7,"Checkpoint keeps journey and garden state")
+	check(game._config_from_checkpoint("Object(Resource,script=Resource(\"res://main.tscn\"))")==null,"Checkpoint cannot parse Object or Resource text")
+	var broken: Dictionary = checkpoint.duplicate(true)
+	broken["garden"]["lights"] = [0.1]
+	check(game._config_from_checkpoint(broken)==null,"Malformed light arrays cannot replace a good save")
+	broken = checkpoint.duplicate(true)
+	broken["revision"] = INF
+	check(game._config_from_checkpoint(broken)==null,"Non-finite checkpoint values are rejected")
+	broken = checkpoint.duplicate(true)
+	broken["journey"]["progress"] = 99
+	check(game._config_from_checkpoint(broken)==null,"Out-of-range journey data is rejected")
+	broken = checkpoint.duplicate(true)
+	broken["version"] = true
+	check(game._config_from_checkpoint(broken)==null,"Boolean schema versions fail quietly")
+	broken["version"] = "1"
+	check(game._config_from_checkpoint(broken)==null,"Text schema versions fail quietly")
 	var missing_glyphs: Array[String] = []
 	var source_text := FileAccess.get_file_as_string("res://scripts/main.gd")
 	for ch in source_text:

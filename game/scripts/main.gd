@@ -27,6 +27,7 @@ const PHYSICS_RATE = 5.1
 const DAMPING = 0.055
 const MAX_PULL = 1.22
 const HIT_TOLERANCE = 0.15
+const WEB_SAVE_KEY = "moon-pendulum.demo8.save.v1"
 
 var size := Vector2.ZERO
 var pivot := Vector2.ZERO
@@ -96,6 +97,7 @@ var pause_rect := Rect2()
 var stage_rect := Rect2()
 var best_chapters: Array = [0, 0, 0, 0, 0]
 var testing := false
+var save_revision := 0
 var duet_hits: Array[bool] = [false, false]
 var duet_checked: Array[bool] = [false, false]
 var duet_errors: Array[float] = [0.0, 0.0]
@@ -873,10 +875,12 @@ func _button(rect: Rect2, label: String, primary: bool = false, disabled: bool =
 	_text(label,Vector2(rect.get_center().x,rect.position.y+rect.size.y*0.64),font_size,color,true)
 
 func _glow(pos: Vector2, radius: float, color: Color, strength: float = 1.0) -> void:
-	for i in range(5, 0, -1):
+	# Small overlapping steps keep the glow soft at desktop and phone scales.
+	for i in range(28, 0, -1):
+		var t := float(i) / 28.0
 		var c := color
-		c.a = 0.021 * strength * (6.0 - float(i))
-		draw_circle(pos, radius * (1.0 + float(i) * 0.35), c)
+		c.a = 0.630 * strength * (1.0 - t) / 28.0
+		draw_circle(pos, radius * (1.05 + t * 1.70), c)
 
 func _draw() -> void:
 	if size.x <= 0.0:
@@ -960,7 +964,8 @@ func _draw_background() -> void:
 		var alpha: float = 0.32 if reduced_motion else 0.23 + 0.20 * sin(elapsed * 0.55 + star["phase"])
 		draw_circle(pos, star["r"], Color(0.66, 0.8, 0.79, alpha))
 	var pond_y := pivot.y + length + 71.0
-	var horizon := minf(pond_y, size.y - 192.0)
+	# Keep the resonant water visible above the score, including wide windows.
+	var horizon := minf(pond_y, size.y - 321.0)
 	# Soft nocturnal ridges, reflected rings and reeds frame the instrument.
 	for row in range(3):
 		var pts := PackedVector2Array([Vector2(-20.0, size.y)])
@@ -969,12 +974,23 @@ func _draw_background() -> void:
 			var y := horizon - 14.0 + float(row) * 19.0 + sin(float(i) * 0.58 + float(row) * 1.9) * 19.0
 			pts.append(Vector2(x, y))
 		pts.append(Vector2(size.x + 20.0, size.y))
-		draw_colored_polygon(pts, [Color("102c35"), Color("0c2630"), Color("0b202c")][row])
+		draw_colored_polygon(pts, _tone_color("deep").darkened(0.16+float(row)*0.15))
 	for i in range(10):
 		var y := horizon + 19.0 + float(i) * 14.0
 		var width := 38.0 + float(i) * 15.0
 		draw_line(Vector2(size.x * 0.5 - width, y), Vector2(size.x * 0.5 + width, y), Color(0.31, 0.56, 0.58, 0.07), 1.0)
 	if free_play:
+		for ring in ripples:
+			var age: float = ring["age"]
+			var center := Vector2(float(ring["pos"].x),horizon+27.0)
+			var width := 12.0+age*28.0
+			var ellipse := PackedVector2Array()
+			for j in range(33):
+				var angle := float(j)*TAU/32.0
+				ellipse.append(center+Vector2(cos(angle)*width,sin(angle)*width*0.12))
+			var c := _tone_color("teal")
+			c.a = (1.0-age/2.2)*float(ring["strength"])*0.22
+			draw_polyline(ellipse,c,1.0,true)
 		for i in range(7):
 			var level: float = garden_lights[i]
 			if level > 0.10:
@@ -1137,7 +1153,19 @@ func _draw_help() -> void:
 
 func _load_save() -> void:
 	var config := ConfigFile.new()
-	if config.load("user://moon_pendulum.cfg") == OK:
+	var loaded := config.load("user://moon_pendulum.cfg") == OK
+	if OS.has_feature("web"):
+		# The tiny synchronous checkpoint survives an immediate refresh. Godot's
+		# user:// IndexedDB filesystem remains the fallback for older saves.
+		var stored = JavaScriptBridge.eval("(function(){try{return window.localStorage.getItem("+JSON.stringify(WEB_SAVE_KEY)+");}catch(e){return null;}})()")
+		if stored is String and not stored.is_empty() and stored.length()<32768:
+			var data = JSON.parse_string(stored)
+			var checkpoint := _config_from_checkpoint(data)
+			if checkpoint!=null and (not loaded or int(checkpoint.get_value("meta","revision",0))>=int(config.get_value("meta","revision",0))):
+				config = checkpoint
+				loaded = true
+	if loaded:
+		save_revision = maxi(0,int(config.get_value("meta","revision",0)))
 		muted = bool(config.get_value("settings","muted",false))
 		palette_index = clampi(int(config.get_value("settings","palette",0)),0,2)
 		palette_from = palette_index
@@ -1150,10 +1178,64 @@ func _load_save() -> void:
 		for i in range(CHAPTERS.size()):
 			best_chapters[i] = int(config.get_value("best", str(i), 0))
 
+func _checkpoint_number(value: Variant, minimum: float, maximum: float, integer: bool = false) -> bool:
+	if typeof(value) not in [TYPE_INT,TYPE_FLOAT]:
+		return false
+	var number := float(value)
+	return is_finite(number) and number>=minimum and number<=maximum and (not integer or number==floorf(number))
+
+func _config_from_checkpoint(data: Variant) -> ConfigFile:
+	# JSON basic types only: do not parse Object/Resource-capable Variant text.
+	if not data is Dictionary:
+		return null
+	if not _checkpoint_number(data.get("version"),1,1,true):
+		return null
+	if not _checkpoint_number(data.get("revision"),0,1e9,true) or not data.get("muted") is bool or not _checkpoint_number(data.get("palette"),0,2,true):
+		return null
+	var best = data.get("best")
+	var journey = data.get("journey")
+	var garden = data.get("garden")
+	if not best is Array or best.size()!=CHAPTERS.size() or not journey is Dictionary or not garden is Dictionary:
+		return null
+	for rating in best:
+		if not _checkpoint_number(rating,0,3,true):
+			return null
+	var clean_journey: Dictionary = {}
+	if not journey.is_empty():
+		if not _checkpoint_number(journey.get("chapter"),0,CHAPTERS.size()-1,true):
+			return null
+		var index := int(journey["chapter"])
+		if not _checkpoint_number(journey.get("progress"),0,CHAPTERS[index]["targets"].size()-1,true) or not _checkpoint_number(journey.get("casts"),0,1e7,true) or not _checkpoint_number(journey.get("perfects"),0,1e7,true):
+			return null
+		for key in ["chapter","progress","casts","perfects"]:
+			clean_journey[key] = int(journey[key])
+	var clean_garden: Dictionary = {}
+	if not garden.is_empty():
+		var lights = garden.get("lights")
+		if not lights is Array or lights.size()!=7 or not _checkpoint_number(garden.get("energy"),0,1):
+			return null
+		var levels: Array[float] = []
+		for level in lights:
+			if not _checkpoint_number(level,0,1):
+				return null
+			levels.append(float(level))
+		clean_garden = {"lights":levels,"energy":float(garden["energy"])}
+	var config := ConfigFile.new()
+	config.set_value("meta","revision",int(data["revision"]))
+	config.set_value("settings","muted",data["muted"])
+	config.set_value("settings","palette",int(data["palette"]))
+	config.set_value("journey","resume",clean_journey)
+	config.set_value("garden","scene",clean_garden)
+	for i in range(best.size()):
+		config.set_value("best",str(i),int(best[i]))
+	return config
+
 func _save() -> void:
 	if testing:
 		return
 	var config := ConfigFile.new()
+	save_revision += 1
+	config.set_value("meta","revision",save_revision)
 	config.set_value("settings","muted",muted)
 	config.set_value("settings","palette",palette_index)
 	if not free_play:
@@ -1165,9 +1247,14 @@ func _save() -> void:
 	for i in range(CHAPTERS.size()):
 		config.set_value("best", str(i), best_chapters[i])
 	config.save("user://moon_pendulum.cfg")
+	if OS.has_feature("web"):
+		# A versioned JSON checkpoint contains only the small game-state schema.
+		# Storage may be blocked by browser policy; keep filesystem saving intact.
+		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters}
+		JavaScriptBridge.eval("(function(){try{window.localStorage.setItem("+JSON.stringify(WEB_SAVE_KEY)+","+JSON.stringify(JSON.stringify(checkpoint))+");}catch(e){}})()")
 
 func _publish_state() -> void:
 	# A read-only public QA snapshot. It cannot alter gameplay or storage.
 	if OS.has_feature("web"):
-		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
+		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		JavaScriptBridge.eval("window.moonPendulumState = " + JSON.stringify(state) + ";")
