@@ -49,7 +49,7 @@ Web:
 
 ```sh
 mkdir -p docs
-godot --headless --path game --export-release Web docs/index.html
+godot --headless --path game --export-release Web ../docs/index.html
 python -m http.server 8000 --directory docs
 ```
 
