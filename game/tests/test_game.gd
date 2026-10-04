@@ -125,7 +125,7 @@ func run() -> void:
 		game._physics_process(1.0 / 60.0)
 	check(game.progress == 0 and not game.chapter_done and game.swinging, "Free performance has no scoring / forced completion")
 	game._new_chapter(0)
-	check(not game.free_play and game.tempo_index == 1, "Return to chapters restores standard physics")
+	check(not game.free_play and game.gravity_index == 1, "Return to chapters restores standard physics")
 	game._new_chapter(0)
 	var held := InputEventKey.new()
 	held.keycode = KEY_LEFT
@@ -259,6 +259,109 @@ func run() -> void:
 	check(game._config_from_checkpoint(broken)==null,"Boolean schema versions fail quietly")
 	broken["version"] = "1"
 	check(game._config_from_checkpoint(broken)==null,"Text schema versions fail quietly")
+	check(restored.get_value("settings","gravity")==1,"Old checkpoints default to standard gravity")
+	broken = checkpoint.duplicate(true)
+	broken["gravity"] = 9
+	check(game._config_from_checkpoint(broken)==null,"Out-of-range gravity is rejected")
+	var outline: PackedVector2Array = game._crescent_shape()
+	check(outline.size()==128 and Geometry2D.triangulate_polygon(outline).size()==378,"True crescent triangulates cleanly")
+	check(not Geometry2D.is_point_in_polygon(Vector2.ZERO,outline),"The missing moon region remains empty sky")
+	check(Geometry2D.is_point_in_polygon(game.MOON_SHOULDER,outline),"The pendant connects to its thick shoulder")
+	for angle in [-1.22,0.0,1.22]:
+		var mass: Vector2 = game._point(angle)
+		var rotation: float = game._moon_rotation(angle)
+		var origin: Vector2 = game._moon_origin(mass,angle,25.0)
+		var ring: Vector2 = origin+game.MOON_BAIL.rotated(rotation)*25.0
+		check((origin+game.MOON_COM.rotated(rotation)*25.0).distance_to(mass)<0.001,"Rotating the pendant does not move its physical center")
+		check((mass-ring).normalized().dot((mass-game.pivot).normalized())>0.9999,"Bail and center of mass follow the string direction")
+	game.muted = false
+	game.paused = false
+	game.show_help = false
+	game._new_chapter(0)
+	game._sound(2,0.8)
+	var held_voice: int = (game.voice-1)%game.BELL_VOICES
+	check(game.players[held_voice].playing,"A real audio voice starts before navigation")
+	game._new_chapter(1)
+	check(game.players[held_voice].playing,"A core scene reset does not stop a ringing tail")
+	game._request_transition("chapter",2)
+	game._request_transition("garden")
+	check(game.transition_action=="chapter" and game.chapter==1,"Navigation locks one destination before fade-out")
+	game._process(0.16)
+	check(game.audio_gain[held_voice]>0.0 and game.audio_gain[held_voice]<1.0,"Navigation fades existing audio instead of cutting immediately")
+	game._process(0.17)
+	check(game.chapter==2 and game.transition_phase==2,"Scene changes once at the dark midpoint")
+	check(game.players[held_voice].playing and game.audio_gain[held_voice]<0.001,"Faded tails keep their natural sample lifetime")
+	game._process(0.34)
+	check(game.transition_phase==0,"Fade-in releases navigation promptly")
+	game._new_chapter(0)
+	game._request_transition("chapter",1)
+	var transition_pause_key := InputEventKey.new()
+	transition_pause_key.keycode = KEY_P
+	transition_pause_key.pressed = true
+	game._input(transition_pause_key)
+	game._process(0.5)
+	check(game.paused and game.chapter==0 and game.transition_phase==1,"Pause remains available during a transition")
+	game._input(transition_pause_key)
+	game._process(0.7)
+	check(game.chapter==1 and game.transition_phase==0,"Resume completes exactly one pending destination")
+	game._request_transition("chapter",2)
+	var transition_help_key := InputEventKey.new()
+	transition_help_key.keycode = KEY_H
+	transition_help_key.pressed = true
+	game._input(transition_help_key)
+	var transition_help_click := InputEventMouseButton.new()
+	transition_help_click.button_index = MOUSE_BUTTON_LEFT
+	transition_help_click.pressed = true
+	transition_help_click.position = game.size*0.5
+	game._input(transition_help_click)
+	check(not game.show_help and game.transition_phase==1,"Help body tap still works during a fade")
+	game._input(transition_help_key)
+	transition_help_click.position = game.help_restart_rect.get_center()
+	game._input(transition_help_click)
+	check(not game.show_help and game.transition_action=="restart" and game.transition_resume["chapter"]==0,"Explicit restart can replace a pending transition")
+	game._process(0.7)
+	check(game.chapter==0 and game.transition_phase==0,"The replacement destination completes exactly once")
+	game._request_transition("chapter",2)
+	game._process(0.40)
+	game._input(transition_help_key)
+	transition_help_click.position = game.help_restart_rect.get_center()
+	game._input(transition_help_click)
+	check(game.transition_phase==1 and game.transition_time>0.0,"Restart during fade-in reverses at the existing opacity")
+	game._process(0.7)
+	check(game.chapter==0 and game.transition_phase==0,"Late restart returns cleanly to the first night")
+	game._new_chapter(4)
+	game.chapter_done = true
+	game._layout()
+	check(game.retry_rect.size==Vector2.ZERO and game.reset_rect.size==Vector2.ZERO and game.next_rect.size.x>0,"Final night exposes only one garden action")
+	var final_hidden_click := InputEventMouseButton.new()
+	final_hidden_click.button_index = MOUSE_BUTTON_LEFT
+	final_hidden_click.pressed = true
+	final_hidden_click.position = Vector2(78,105)
+	game._input(final_hidden_click)
+	check(game.transition_phase==0 and not game.free_play,"Hidden garden shortcut has no surviving hit area")
+	game._new_chapter(0)
+	check(game.next_rect.size==Vector2.ZERO and game.retry_rect.size.x>0,"An unfinished night does not show a premature next action")
+	game.progress = 2
+	game._award_goal(0.01,game._goal_position())
+	check(game.coda_started and game.players[game.BELL_VOICES].stream==game.coda_banks[game.palette_index],"Stage completion plays its own palette-matched harmonic coda")
+	var completed_voice_count: int = game.voice
+	game._award_goal(0.01,game._goal_position())
+	check(game.voice==completed_voice_count and game.progress==3,"One completed night cannot celebrate or advance twice")
+	for i in range(30):
+		game._sound(i%7,0.7)
+	check(game.players[game.BELL_VOICES].stream==game.coda_banks[game.palette_index] and game.players.size()==13,"Bell playing cannot steal the reserved coda voice or grow the pool")
+	game._request_transition("garden")
+	game._process(0.16)
+	check(game.audio_gain[game.BELL_VOICES]>0.5,"Early next action retains a gently fading coda")
+	game._process(0.7)
+	game._toggle_mute()
+	game._process(0.05)
+	var sounding := false
+	for player in game.players:
+		sounding = sounding or player.playing
+	check(not sounding,"Explicit mute stops every voice after a short anti-click ramp")
+	game._new_chapter(0)
+	game._stop_audio(true)
 	var missing_glyphs: Array[String] = []
 	var source_text := FileAccess.get_file_as_string("res://scripts/main.gd")
 	for ch in source_text:
@@ -275,7 +378,15 @@ func run() -> void:
 		check(visible.encloses(game.mute_rect) and visible.encloses(game.pause_rect), "Header controls fit resized viewport")
 		var scale: float = float(resolution.x) / game.size.x
 		check(game.retry_rect.size.y * scale >= 44.0, "Portrait retry touch target is at least 44 physical pixels")
+		check(visible.encloses(game.start_rect) and visible.encloses(game.tour_rect),"Minimal introduction controls fit the viewport")
+		check(game.start_rect.position.y>=game.pivot.y+game.length+57.0,"Hero moon has clear space above the start action")
+		check(game.start_rect.size.y*scale>=44.0,"Portrait start action remains a full touch target")
 	root.size = original_size
 	print("PASS: %d gameplay checks, all 11 optional exercises / 15 lights across 5 nights" % checks)
+	game.paused = true
+	game._stop_audio(true)
+	await create_timer(0.12).timeout
+	await process_frame
 	game.queue_free()
+	await process_frame
 	quit(0)

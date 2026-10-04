@@ -33,11 +33,48 @@ def make_sample(path, midi, pan, attack_time, partials):
     with wave.open(str(path), 'wb') as w:
         w.setnchannels(2); w.setsampwidth(2); w.setframerate(rate); w.writeframes(data)
 
+def make_coda(path, attack_time, partials):
+    """A quiet D-major bloom, changing note lengths, then an open tonic."""
+    rate, duration = 22050, 4.8
+    frames = int(rate * duration)
+    left, right = [0.0]*frames, [0.0]*frames
+    events = [
+        (0.00,62,.22,-.18),(0.04,66,.16,.04),(0.09,69,.13,.20),
+        (0.38,74,.24,.22),(0.66,71,.20,.12),(1.10,69,.22,-.08),
+        (1.68,66,.18,-.18),(2.10,64,.17,.10),
+        (2.60,62,.25,0.0),(2.60,50,.19,-.14),(2.64,69,.11,.18),
+    ]
+    for at,midi,level,pan in events:
+        start = int(at*rate)
+        freq = 440 * 2**((midi-69)/12)
+        angle = (pan+1)*math.pi/4
+        l,r = math.cos(angle),math.sin(angle)
+        for j in range(min(int(2.4*rate),frames-start)):
+            t = j/rate
+            fade = min(1,(2.4-t)/.30)**2
+            tone = min(1,t/attack_time)*sum(a*math.sin(2*math.pi*freq*p*t)*math.exp(-t/d) for p,a,d in partials)
+            v = level*tone*fade
+            left[start+j] += v*l
+            right[start+j] += v*r
+            for delay,reflection in [(int(.21*rate),.17),(int(.43*rate),.08)]:
+                if start+j+delay<frames:
+                    left[start+j+delay] += v*r*reflection
+                    right[start+j+delay] += v*l*reflection
+    peak = max(max(map(abs,left)),max(map(abs,right)))
+    scale = min(1,.48/max(peak,.0001))
+    data = bytearray()
+    for i,(l,r) in enumerate(zip(left,right)):
+        fade = min(1,(duration-i/rate)/.30)**2
+        data.extend(struct.pack('<hh',int(l*scale*fade*32767),int(r*scale*fade*32767)))
+    with wave.open(str(path),'wb') as w:
+        w.setnchannels(2);w.setsampwidth(2);w.setframerate(rate);w.writeframes(data)
+
 for prefix, attack, partials in BANKS:
     for index, midi in enumerate(NOTES):
         make_sample(AUDIO/f'{prefix}_{index}.wav', midi, (index-3)/3*.65, attack, partials)
     for name,midi,pan in [('left_low',62,-.38),('right_low',71,.38),('left_high',66,-.38),('right_high',74,.38)]:
         make_sample(AUDIO/f'{prefix}_echo_{name}.wav',midi,pan,attack,partials)
+    make_coda(AUDIO/f'{prefix}_coda.wav',attack,partials)
 font_dir = ROOT / 'game/assets/fonts'
 (font_dir/'MoonSans.ttf').write_bytes(base64.b64decode((font_dir/'MoonSans.ttf.b64').read_text()))
 revision = os.environ.get('GITHUB_SHA', '')
@@ -47,4 +84,4 @@ if not revision:
     except (OSError, subprocess.CalledProcessError): revision = 'local'
 if not re.fullmatch('[0-9a-f]{40}', revision): revision = 'local'
 (ROOT/'game/build_info.gd').write_text('extends RefCounted\nconst COMMIT = "'+revision+'"\n')
-print('Built three original stereo timbres, four spatial echoes per timbre, bundled font and build identity.')
+print('Built three original stereo timbres, spatial echoes, three harmonic codas, bundled font and build identity.')

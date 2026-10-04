@@ -28,6 +28,12 @@ const DAMPING = 0.055
 const MAX_PULL = 1.22
 const HIT_TOLERANCE = 0.15
 const WEB_SAVE_KEY = "moon-pendulum.demo8.save.v1"
+# Geometric area centroid, upper-side bail and a thick shoulder connection.
+# These remain separate so a future measured pendant can adjust its balance.
+const MOON_COM = Vector2(-0.33865537,0.26339862)
+const MOON_BAIL = Vector2(-0.54,-1.03)
+const MOON_SHOULDER = Vector2(-0.55,-0.60)
+const BELL_VOICES = 12
 
 var size := Vector2.ZERO
 var pivot := Vector2.ZERO
@@ -64,11 +70,21 @@ var particles: Array[Dictionary] = []
 var light_flights: Array[Dictionary] = []
 var ripples: Array[Dictionary] = []
 var trail: Array[Vector2] = []
+var crescent_outline := PackedVector2Array()
 var stars: Array[Dictionary] = []
 var players: Array[AudioStreamPlayer] = []
+var audio_base: Array[float] = []
+var audio_gain: Array[float] = []
+var audio_from: Array[float] = []
+var audio_to: Array[float] = []
+var audio_age: Array[float] = []
+var audio_duration: Array[float] = []
+var audio_stop_after: Array[bool] = []
 var sounds: Array[AudioStreamWAV] = []
 var sound_banks: Array = []
 var echo_banks: Array = []
+var coda_banks: Array[AudioStreamWAV] = []
+var coda_started := false
 var palette_index := 0
 var palette_from := 0
 var palette_mix := 1.0
@@ -107,11 +123,19 @@ var echoes: Array[Dictionary] = []
 var chain_rings := 0
 var harmonic_time := 0.0
 var state_clock := 0.0
+var transition_phase := 0
+var transition_time := 0.0
+var transition_action := ""
+var transition_chapter := 0
+var transition_resume: Dictionary = {}
+const TRANSITION_OUT = 0.32
+const TRANSITION_IN = 0.34
 var cadence_notes: Array[Dictionary] = []
 var free_play := false
-var tempo_index := 1
-const TEMPOS = [0.80, 1.0, 1.22]
-const TEMPO_NAMES = ["ゆっくり", "ふつう", "はやく"]
+var gravity_index := 1
+var saved_gravity_index := 1
+const GRAVITY_FACTORS = [0.64, 1.0, 1.4884]
+const GRAVITY_NAMES = ["重力 弱", "重力 標準", "重力 強"]
 
 func _ready() -> void:
 	Engine.max_fps = 60
@@ -129,13 +153,22 @@ func _ready() -> void:
 		for name in ["left_low","right_low","left_high","right_high"]:
 			echoes_bank.append(load("res://assets/audio/%s_echo_%s.wav" % [prefix,name]))
 		echo_banks.append(echoes_bank)
+		coda_banks.append(load("res://assets/audio/%s_coda.wav" % prefix))
 	for stream in sound_banks[0]:
 		sounds.append(stream)
-	for i in range(12):
+	# A reserved coda voice prevents fast bell playing from stealing its ending.
+	for i in range(BELL_VOICES+1):
 		var player := AudioStreamPlayer.new()
 		player.volume_db = -7.0
 		add_child(player)
 		players.append(player)
+		audio_base.append(-13.0)
+		audio_gain.append(1.0)
+		audio_from.append(1.0)
+		audio_to.append(1.0)
+		audio_age.append(0.0)
+		audio_duration.append(0.0)
+		audio_stop_after.append(false)
 	_load_save()
 	_layout()
 	_reset_echoes()
@@ -165,7 +198,7 @@ func _pause_for_focus_loss() -> void:
 	paused = true
 	dragging = false
 	keyboard_aim = false
-	_stop_audio()
+	_stop_audio(true)
 	_save()
 	_publish_state()
 
@@ -174,6 +207,7 @@ func _on_web_visibility_changed(_arguments: Array) -> void:
 		_pause_for_focus_loss()
 
 func _exit_tree() -> void:
+	_stop_audio(true)
 	if web_document != null and visibility_callback != null:
 		web_document.removeEventListener("visibilitychange", visibility_callback)
 
@@ -193,11 +227,21 @@ func _layout() -> void:
 	retry_rect = Rect2(size.x * 0.5 - bw - 8.0, bottom_y - 20.0, bw, 72.0)
 	next_rect = Rect2(size.x * 0.5 + 8.0, bottom_y - 20.0, bw, 72.0)
 	reset_rect = Rect2(28.0, 72.0, 100.0, 66.0)
+	if started and not free_play:
+		if chapter_done:
+			reset_rect = Rect2()
+			if chapter==CHAPTERS.size()-1:
+				retry_rect = Rect2()
+				next_rect = Rect2(size.x*0.5-110.0,bottom_y-20.0,220.0,72.0)
+		else:
+			retry_rect = Rect2(size.x*0.5-110.0,bottom_y-20.0,220.0,72.0)
+			next_rect = Rect2()
 	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
 	help_rect = Rect2(size.x - 202.0, 20.0, 66.0, 66.0)
 	pause_rect = Rect2(size.x - 276.0, 20.0, 66.0, 66.0)
-	start_rect = Rect2(size.x * 0.5 - 156.0, size.y * 0.62, 312.0, 66.0)
-	tour_rect = Rect2(size.x*0.5-142.0,start_rect.end.y+51.0,284.0,66.0)
+	var start_y := clampf(pivot.y+length+91.0,size.y*0.55,size.y-180.0)
+	start_rect = Rect2(size.x * 0.5 - 72.0, start_y, 144.0, 66.0)
+	tour_rect = Rect2(size.x*0.5-100.0,start_rect.end.y+20.0,200.0,66.0)
 	help_restart_rect = Rect2(size.x*0.5-126.0,size.y*0.26+470.0,252.0,66.0)
 
 func _target() -> float:
@@ -210,7 +254,9 @@ func _point(angle: float, radius: float = -1.0) -> Vector2:
 	return pivot + Vector2(sin(angle), cos(angle)) * r
 
 func _process(delta: float) -> void:
+	_advance_audio_envelopes(delta)
 	if not paused and not show_help:
+		_advance_transition(delta)
 		elapsed += delta
 		state_clock += delta
 		if state_clock >= 0.5:
@@ -252,14 +298,14 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _physics_process(delta: float) -> void:
-	if not started or paused or show_help:
+	if not started or paused or show_help or transition_phase!=0:
 		return
 	_echo_physics(delta)
 	if dragging or not swinging:
 		return
 	var previous_theta := theta
 	var previous_omega := omega
-	omega += (-PHYSICS_RATE * pow(float(TEMPOS[tempo_index]), 2.0) * sin(theta) - (0.22 if free_play else DAMPING) * omega) * delta
+	omega += (-PHYSICS_RATE * float(GRAVITY_FACTORS[gravity_index]) * sin(theta) - (0.22 if free_play else DAMPING) * omega) * delta
 	theta += omega * delta
 	cast_seconds += delta
 	if previous_theta * theta < 0.0:
@@ -365,7 +411,7 @@ func _echo_physics(delta: float) -> void:
 	for e in echoes:
 		var old: float = e["theta"]
 		var old_omega: float = e["omega"]
-		e["omega"] += (-11.4 * sin(float(e["theta"])) - 0.50 * float(e["omega"])) * delta
+		e["omega"] += (-11.4 * float(GRAVITY_FACTORS[gravity_index]) * sin(float(e["theta"])) - 0.50 * float(e["omega"])) * delta
 		e["theta"] += float(e["omega"]) * delta
 		e["glow"] = maxf(0.0, float(e["glow"]) - delta * 0.70)
 		e["cooldown"] = maxf(0.0, float(e["cooldown"]) - delta)
@@ -398,11 +444,8 @@ func _draw_echoes() -> void:
 		draw_line(feed, ep + Vector2(0.0, el + 20.0), Color(wire_color, 0.55), 1.0, true)
 		draw_line(ep + Vector2(0.0, el + 20.0), ep, Color(wire_color, 0.55), 1.0, true)
 		draw_arc(ep, el, PI*0.5-0.9, PI*0.5+0.9, 32, Color(0.39,0.62,0.59,0.12), 1.0, true)
-		draw_line(ep, bob, Color("80a497"), 1.0, true)
 		draw_circle(ep, 4.0, _tone_color("gold") if e["charged"] else MUTED)
-		_glow(bob, 10.0, _tone_color("teal"), glow * 1.3)
-		draw_circle(bob, 10.0, Color("6a9690").lerp(_tone_color("teal"), glow))
-		draw_circle(bob + Vector2(3,-3), 7.0, Color("17363f"))
+		_draw_moon(ep,bob,float(e["theta"]),10.0,Color("6a9690").lerp(_tone_color("teal"),glow),glow*1.3,Color("80a497"),1.0)
 		if not chapter_done and _goal_kind() in ["relay", "duet"]:
 			if _goal_kind() == "duet" or side == (0 if _target() < 0.0 else 1):
 				var target_angle := _echo_target(side)
@@ -442,11 +485,40 @@ func _cycle_palette() -> void:
 func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.0) -> void:
 	if muted or not started or paused or show_help:
 		return
-	var player := players[voice % players.size()]
+	var slot := voice % BELL_VOICES
 	voice += 1
+	_play_voice(stream,strength,base_db,slot)
+
+func _play_voice(stream: AudioStreamWAV, strength: float, base_db: float, slot: int) -> void:
+	if muted or not started or paused or show_help:
+		return
+	var player := players[slot]
 	player.stream = stream
-	player.volume_db = base_db + strength*6.0
+	audio_base[slot] = base_db + strength*6.0
+	audio_gain[slot] = _transition_audio_gain()
+	audio_duration[slot] = 0.0
+	audio_stop_after[slot] = false
+	_apply_voice_gain(slot)
 	player.play()
+	if transition_phase==1:
+		_fade_voice(slot,0.0,maxf(0.001,TRANSITION_OUT-transition_time))
+	elif transition_phase==2:
+		_fade_voice(slot,1.0,maxf(0.001,TRANSITION_IN-transition_time))
+
+func _play_coda() -> void:
+	if coda_started or free_play:
+		return
+	coda_started = true
+	_play_voice(coda_banks[palette_index],0.85,-14.0,BELL_VOICES)
+
+func _coda_light() -> float:
+	if reduced_motion:
+		return 0.65
+	var pulse := 0.0
+	for at in [0.06,0.44,0.72,1.16,1.74,2.16,2.66]:
+		var distance := (finish_time-float(at))/0.24
+		pulse += exp(-distance*distance)*0.50
+	return 0.42+pulse
 
 func _sound(index: int, strength: float = 0.8) -> void:
 	_play_sample(sound_banks[palette_index][index],strength)
@@ -463,9 +535,96 @@ func _preview_pull() -> void:
 		_play_sample(sound_banks[1][note],0.25,-24.0)
 
 
-func _stop_audio() -> void:
-	for player in players:
-		player.stop()
+func _apply_voice_gain(slot: int) -> void:
+	players[slot].volume_db = audio_base[slot]+linear_to_db(maxf(0.0001,audio_gain[slot]))
+
+func _fade_voice(slot: int, target: float, duration: float, stop_after: bool = false) -> void:
+	audio_from[slot] = audio_gain[slot]
+	audio_to[slot] = target
+	audio_age[slot] = 0.0
+	audio_duration[slot] = duration
+	audio_stop_after[slot] = stop_after
+
+func _advance_audio_envelopes(delta: float) -> void:
+	for i in range(players.size()):
+		if audio_duration[i]<=0.0:
+			continue
+		audio_age[i] += delta
+		var t := clampf(audio_age[i]/audio_duration[i],0.0,1.0)
+		var ease := t*t*(3.0-2.0*t)
+		audio_gain[i] = lerpf(audio_from[i],audio_to[i],ease)
+		_apply_voice_gain(i)
+		if t>=1.0:
+			audio_duration[i] = 0.0
+			if audio_stop_after[i]:
+				players[i].stop()
+				audio_stop_after[i] = false
+
+func _stop_audio(immediate: bool = false) -> void:
+	for i in range(players.size()):
+		if immediate:
+			players[i].stop()
+			audio_duration[i] = 0.0
+			audio_gain[i] = 0.0
+		elif players[i].playing:
+			_fade_voice(i,0.0,0.035,true)
+
+func _transition_audio_gain() -> float:
+	if transition_phase==0:
+		return 1.0
+	var t := clampf(transition_time/(TRANSITION_OUT if transition_phase==1 else TRANSITION_IN),0.0,1.0)
+	var ease := t*t*(3.0-2.0*t)
+	return 1.0-ease if transition_phase==1 else ease
+
+func _request_transition(action: String, index: int = 0) -> void:
+	if action not in ["chapter","garden","journey","restart"] or (transition_phase!=0 and action!="restart"):
+		return
+	if action=="chapter" and (index<0 or index>=CHAPTERS.size()):
+		return
+	var continue_time := 0.0
+	if transition_phase==1:
+		continue_time = transition_time
+	elif transition_phase==2:
+		# Reverse the curtain at its present opacity, without a bright flash.
+		continue_time = TRANSITION_OUT*(1.0-clampf(transition_time/TRANSITION_IN,0.0,1.0))
+	_cancel_aim()
+	transition_phase = 1
+	transition_time = continue_time
+	transition_action = action
+	transition_chapter = index
+	transition_resume = {}
+	if action in ["chapter","restart"]:
+		transition_resume = {"chapter":index if action=="chapter" else 0,"progress":0,"casts":0,"perfects":0}
+	elif action=="garden" and not free_play:
+		transition_resume = _snapshot_journey()
+	# Commit navigation intent now, not after the visual curtain. An immediate
+	# refresh must not undo the explicit "start over" the player just chose.
+	_save()
+	for i in range(players.size()):
+		if players[i].playing:
+			var duration := maxf(0.001,TRANSITION_OUT-transition_time)
+			_fade_voice(i,0.0,duration+TRANSITION_IN if i==BELL_VOICES else duration)
+	_publish_state()
+
+func _advance_transition(delta: float) -> void:
+	if transition_phase==0:
+		return
+	transition_time += delta
+	if transition_phase==1 and transition_time>=TRANSITION_OUT:
+		transition_phase = 2
+		transition_time -= TRANSITION_OUT
+		match transition_action:
+			"chapter": _new_chapter(transition_chapter)
+			"garden": _enter_garden()
+			"journey": _return_to_journey()
+			"restart": _return_to_journey(true)
+		_sound(2,0.30)
+		transition_resume = {}
+		_publish_state()
+	if transition_phase==2 and transition_time>=TRANSITION_IN:
+		transition_phase = 0
+		transition_time = 0.0
+		_publish_state()
 
 func _judge_turn() -> void:
 	if _goal_kind() in ["relay", "duet"]:
@@ -497,6 +656,8 @@ func _judge_turn() -> void:
 	_publish_state()
 
 func _award_goal(error: float, where: Vector2) -> void:
+	if chapter_done or free_play:
+		return
 	cast_judged = true
 	if not reduced_motion:
 		light_flights.append({"from":where, "index":progress, "age":0.0})
@@ -527,8 +688,9 @@ func _award_goal(error: float, where: Vector2) -> void:
 		var rating := 3 if casts <= progress + 1 else (2 if casts <= progress * 2 else 1)
 		best_chapters[chapter] = maxi(int(best_chapters[chapter]), rating)
 		_save()
-		cadence_notes = [{"at": harmonic_time + 0.2, "index": 0}, {"at": harmonic_time + 0.42, "index": 2}, {"at": harmonic_time + 0.64, "index": 4}, {"at": harmonic_time + 0.88, "index": 5}, {"at": harmonic_time + 1.12, "index": 6}]
+		_play_coda()
 	_save()
+	_layout()
 	_publish_state()
 
 func _judge_echo_turn(side: int, angle: float) -> void:
@@ -676,16 +838,16 @@ func _return_to_journey(restart: bool = false) -> void:
 	_publish_state()
 
 
-func _retry() -> void:
+func _retry(clear_cadence: bool = true) -> void:
 	dragging = false
 	keyboard_aim = false
 	swinging = false
 	omega = 0.0
 	theta = 0.0
 	trail.clear()
-	_stop_audio()
 	_reset_echoes()
-	cadence_notes.clear()
+	if clear_cadence:
+		cadence_notes.clear()
 	feedback = "光の反対側へ引いて、もうひと振り。" if not free_play else "光のない夜を、好きな音で奏でよう。"
 	feedback_timer = 0.0
 	if _goal_kind() == "relay":
@@ -697,7 +859,7 @@ func _retry() -> void:
 func _new_chapter(index: int) -> void:
 	free_play = index == CHAPTERS.size()
 	chapter = 2 if free_play else clampi(index, 0, CHAPTERS.size()-1)
-	tempo_index = 1
+	gravity_index = saved_gravity_index if free_play else 1
 	has_last_turn = false
 	has_last_echo_turn = [false,false]
 	last_pull_note = -1
@@ -705,11 +867,13 @@ func _new_chapter(index: int) -> void:
 	casts = 0
 	perfects = 0
 	chapter_done = false
+	coda_started = false
 	finish_time = 0.0
 	particles.clear()
 	light_flights.clear()
 	ripples.clear()
-	_retry()
+	_retry(false)
+	_layout()
 	if free_play:
 		feedback = "光のない夜を、好きな音で奏でよう。"
 	elif _goal_kind() == "relay":
@@ -725,6 +889,14 @@ func _toggle_mute() -> void:
 	_publish_state()
 
 func _input(event: InputEvent) -> void:
+	if transition_phase!=0 and not show_help:
+		var interruption := false
+		if event is InputEventKey:
+			interruption = event.keycode in [KEY_M,KEY_P,KEY_ESCAPE,KEY_H]
+		elif event is InputEventMouseButton and event.pressed:
+			interruption = mute_rect.has_point(event.position) or pause_rect.has_point(event.position) or help_rect.has_point(event.position)
+		if not interruption:
+			return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			var pos: Vector2 = event.position
@@ -738,7 +910,7 @@ func _input(event: InputEvent) -> void:
 				show_help = false
 				if help_restart_rect.has_point(pos):
 					paused = false
-					_return_to_journey(true)
+					_request_transition("restart")
 				_publish_state()
 				return
 			if paused:
@@ -765,23 +937,25 @@ func _input(event: InputEvent) -> void:
 				_publish_state()
 			elif retry_rect.has_point(pos):
 				if free_play:
-					_return_to_journey()
+					_request_transition("journey")
 				elif chapter_done:
-					_enter_garden()
+					_request_transition("garden")
 				else:
 					_new_chapter(chapter) if chapter_done else _retry()
 			elif (chapter_done or free_play) and next_rect.has_point(pos):
 				if free_play:
 					_cycle_palette()
 				elif chapter+1 >= CHAPTERS.size():
-					_enter_garden()
+					_request_transition("garden")
 				else:
-					_new_chapter(chapter+1)
+					_request_transition("chapter",chapter+1)
 			elif reset_rect.has_point(pos):
 				if free_play:
-					tempo_index = (tempo_index + 1) % TEMPOS.size()
+					gravity_index = (gravity_index + 1) % GRAVITY_FACTORS.size()
+					_save()
+					_publish_state()
 				else:
-					_enter_garden()
+					_request_transition("garden")
 			elif stage_rect.has_point(pos) and not paused:
 				_begin_pull(pos)
 		else:
@@ -819,15 +993,15 @@ func _input(event: InputEvent) -> void:
 					_stop_audio()
 				_publish_state()
 			KEY_R:
-				_new_chapter(chapter) if chapter_done else _retry()
+				_request_transition("chapter",chapter) if chapter_done else _retry()
 			KEY_N:
 				if free_play:
 					_cycle_palette()
 			KEY_ENTER:
 				if free_play:
-					_return_to_journey()
+					_request_transition("journey")
 				elif chapter_done:
-					_enter_garden() if chapter+1>=CHAPTERS.size() else _new_chapter(chapter+1)
+					_request_transition("garden") if chapter+1>=CHAPTERS.size() else _request_transition("chapter",chapter+1)
 			KEY_LEFT, KEY_RIGHT:
 				if not chapter_done and not paused:
 					if not dragging:
@@ -874,7 +1048,63 @@ func _button(rect: Rect2, label: String, primary: bool = false, disabled: bool =
 		font_size -= 1
 	_text(label,Vector2(rect.get_center().x,rect.position.y+rect.size.y*0.64),font_size,color,true)
 
+func _pause_button() -> void:
+	_panel(pause_rect,_tone_color("deep").darkened(0.18),Color("33515b"),10.0)
+	var center := pause_rect.get_center()
+	if paused:
+		draw_colored_polygon(PackedVector2Array([center+Vector2(-8,-12),center+Vector2(-8,12),center+Vector2(12,0)]),WHITE)
+	else:
+		draw_rect(Rect2(center+Vector2(-11,-12),Vector2(7,24)),WHITE)
+		draw_rect(Rect2(center+Vector2(4,-12),Vector2(7,24)),WHITE)
+
+func _crescent_shape() -> PackedVector2Array:
+	if crescent_outline.is_empty():
+		# Trace the outer exposed arc, then the inner arc between intersections.
+		# This is one concave polygon, with actual empty sky in the missing part.
+		var offset := Vector2(0.36,-0.28)
+		var distance := offset.length()
+		var direction := offset.angle()
+		var intersection := (1.0-0.84*0.84+distance*distance)/(2.0*distance)
+		var outer := acos(intersection)
+		var inner := acos((intersection-distance)/0.84)
+		for i in range(65):
+			var angle := direction+outer+(TAU-2.0*outer)*float(i)/64.0
+			crescent_outline.append(Vector2(cos(angle),sin(angle)))
+		for i in range(1,64):
+			var angle := direction+TAU-inner-(TAU-2.0*inner)*float(i)/64.0
+			crescent_outline.append(offset+Vector2(cos(angle),sin(angle))*0.84)
+	return crescent_outline
+
+func _moon_rotation(angle: float) -> float:
+	# The bail-to-centroid vector rests downwards, then follows the swing.
+	var balance := MOON_COM-MOON_BAIL
+	return -angle+atan2(balance.x,balance.y)
+
+func _moon_origin(mass_pos: Vector2, angle: float, radius: float) -> Vector2:
+	return mass_pos-MOON_COM.rotated(_moon_rotation(angle))*radius
+
+func _draw_moon(anchor: Vector2, mass_pos: Vector2, angle: float, radius: float, color: Color, glow: float, strand: Color, line_width: float = 1.8) -> void:
+	var rotation := _moon_rotation(angle)
+	var origin := _moon_origin(mass_pos,angle,radius)
+	var ring_center := origin+MOON_BAIL.rotated(rotation)*radius
+	var ring_radius := maxf(1.5,radius*0.10)
+	var connection := ring_center+(anchor-ring_center).normalized()*ring_radius
+	draw_line(anchor,connection,strand,line_width,true)
+	_glow(origin,radius,color,glow)
+	var shoulder := origin+MOON_SHOULDER.rotated(rotation)*radius
+	var ring_bottom := ring_center+Vector2(0,ring_radius).rotated(rotation)
+	draw_line(shoulder,ring_bottom,color,maxf(1.2,radius*0.08),true)
+	var points := PackedVector2Array()
+	for point in _crescent_shape():
+		points.append(origin+point.rotated(rotation)*radius)
+	draw_colored_polygon(points,color)
+	points.append(points[0])
+	draw_polyline(points,color,0.8,true)
+	draw_arc(ring_center,ring_radius,0,TAU,24,color,1.2,true)
+
 func _glow(pos: Vector2, radius: float, color: Color, strength: float = 1.0) -> void:
+	if strength<=0.0:
+		return
 	# Small overlapping steps keep the glow soft at desktop and phone scales.
 	for i in range(28, 0, -1):
 		var t := float(i) / 28.0
@@ -893,17 +1123,23 @@ func _draw() -> void:
 	_draw_header()
 	if started:
 		_draw_score()
-		_button(retry_rect, ("つづきへ" if not journey_resume.is_empty() or _resume_chapter()>0 else "星を灯す遊び") if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"))
-		_button(next_rect, "夜の色・音色  N" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true, not chapter_done and not free_play)
+		if retry_rect.size.x>0.0:
+			_button(retry_rect, ("つづきへ" if not journey_resume.is_empty() or _resume_chapter()>0 else "星を灯す遊び") if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"))
+		if next_rect.size.x>0.0:
+			_button(next_rect, "夜を変える" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
 	else:
 		_draw_intro()
+	if transition_phase!=0:
+		var t := clampf(transition_time/(TRANSITION_OUT if transition_phase==1 else TRANSITION_IN),0.0,1.0)
+		var ease := t*t*(3.0-2.0*t)
+		draw_rect(Rect2(Vector2.ZERO,size),Color(_tone_color("ink"),ease if transition_phase==1 else 1.0-ease))
 	if show_help and started:
 		_draw_help()
 	if paused and started and not show_help:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.015, 0.03, 0.04, 0.78))
 		_text("ひと休み", Vector2(size.x * 0.5, size.y * 0.46), 38, _tone_color("gold"), true)
-		_text("P または右上の ▶ で、夜を再開", Vector2(size.x * 0.5, size.y * 0.46 + 47.0), 21, WHITE, true)
-		_button(pause_rect, "▶")
+		_text("P または右上で、夜を再開", Vector2(size.x * 0.5, size.y * 0.46 + 47.0), 21, WHITE, true)
+		_pause_button()
 
 func _sky_position(index: int) -> Vector2:
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
@@ -931,7 +1167,7 @@ func _draw_sky_constellation() -> void:
 			var line_color := Color(_tone_color("gold"),0.32) if lit else Color(_tone_color("teal"),0.10)
 			draw_line(_sky_position(i-1), pos, line_color, 1.0, true)
 		if lit:
-			_glow(pos, 7.0, _tone_color("gold"), 1.0)
+			_glow(pos, 7.0, _tone_color("gold"), _coda_light()*1.55 if chapter_done else 1.0)
 			draw_line(pos + Vector2(-6,0), pos + Vector2(6,0), Color(0.96,0.87,0.64,0.6), 1.0, true)
 			draw_line(pos + Vector2(0,-6), pos + Vector2(0,6), Color(0.96,0.87,0.64,0.6), 1.0, true)
 		draw_circle(pos, 2.3 if lit else 1.6, _tone_color("gold") if lit else Color("335661"))
@@ -1001,6 +1237,13 @@ func _draw_background() -> void:
 					var c := _tone_color("gold")
 					c.a = level*(0.15-float(j)*0.026)
 					draw_line(pos+Vector2(-half,float(j)*8.0),pos+Vector2(half,float(j)*8.0),c,1.0,true)
+	elif chapter_done:
+		var bloom := _coda_light()
+		var reflection := Vector2(size.x*0.5,horizon+28.0)
+		_glow(reflection,28.0,_tone_color("gold"),bloom*0.45)
+		for j in range(5):
+			var half := 18.0+float(j)*15.0
+			draw_line(reflection+Vector2(-half,float(j)*7.0),reflection+Vector2(half,float(j)*7.0),Color(_tone_color("gold"),bloom*(0.14-float(j)*0.02)),1.0,true)
 	for side in [-1.0, 1.0]:
 		for i in range(7):
 			var x: float = size.x * 0.5 + side * (size.x * 0.40 + float(i) * 7.0)
@@ -1010,13 +1253,17 @@ func _draw_background() -> void:
 			draw_line(tip - Vector2(0, -13), tip + Vector2(side * 12, 8), Color("315657"), 1.2)
 
 func _draw_header() -> void:
+	if not started:
+		var title_y := clampf(pivot.y-70.0,size.y*0.11,size.y*0.19)
+		_text("月の振り子",Vector2(size.x*0.5,title_y),42,_tone_color("gold"),true)
+		return
 	_text("月の振り子", Vector2(30.0, 49.0), 30, _tone_color("gold"))
-	_text("MOON PENDULUM", Vector2(31.0, 70.0), 11, MUTED)
 	if started:
 		_button(mute_rect, "音 OFF" if muted else "音 ON")
 		_button(help_rect, "？")
-		_button(pause_rect, "▶" if paused else "Ⅱ")
-		_button(reset_rect,TEMPO_NAMES[tempo_index]+" →" if free_play else "庭へ")
+		_pause_button()
+		if reset_rect.size.x>0.0:
+			_button(reset_rect,GRAVITY_NAMES[gravity_index] if free_play else "庭へ")
 
 func _draw_stage() -> void:
 	var arc_color := Color(0.38, 0.6, 0.59, 0.14)
@@ -1042,7 +1289,8 @@ func _draw_stage() -> void:
 		draw_colored_polygon(points, Color("446a6b").lerp(_tone_color("teal"), glow))
 		draw_line(pos + Vector2(-11,7), pos + Vector2(11,7), Color("a9b69b").lerp(WHITE, glow), 1.5)
 		draw_circle(pos + Vector2(0,10), 2.0, _tone_color("gold"))
-		_text(NOTE_NAMES[i], pos + Vector2(0, 35), 11, MUTED, true)
+		if started:
+			_text(NOTE_NAMES[i], pos + Vector2(0, 35), 11, MUTED, true)
 	if started and not chapter_done and _goal_kind() == "main":
 		var target := _target()
 		var target_pos := _point(target)
@@ -1066,27 +1314,27 @@ func _draw_stage() -> void:
 		c.a = maxf(0.0, 1.0 - float(r["age"]) / 2.2) * 0.26
 		draw_arc(r["pos"], 8.0 + float(r["age"]) * 45.0, 0, TAU, 32, c, 1.0, true)
 	var moon := _point(theta)
-	_glow(moon, 25.0, _tone_color("gold"), 1.4)
-	draw_line(pivot, moon, Color("86aaa2"), 1.8, true)
+	var moon_radius := 25.0 if started else 42.0
+	_draw_moon(pivot,moon,theta,moon_radius,_tone_color("gold"),1.4,Color("86aaa2"))
 	draw_circle(pivot, 6.0, _tone_color("gold"))
 	draw_circle(pivot, 2.0, INK)
-	draw_circle(moon, 25.0, _tone_color("gold"))
-	draw_circle(moon+Vector2(9,-7),21.0,_tone_color("deep").lightened(0.04))
-	draw_arc(moon, 30.0, 0, TAU, 48, Color(0.92,0.84,0.65,0.15), 1.0, true)
 	if dragging:
 		draw_arc(moon, 38.0, 0, TAU, 48, Color(0.64,0.89,0.82,0.4), 1.0, true)
-		_text("指を離して放す", moon + Vector2(0, 59), 16, WHITE, true)
-	elif started and not swinging and not chapter_done:
-		_text("← 左へ引いて、離す" if chapter==0 and progress==0 and casts==0 and not free_play else "引いて、離して奏でる",Vector2(moon.x,minf(moon.y+61.0,size.y-266.0)),17,MUTED,true)
+		_text("離す", moon + Vector2(0, 59), 16, WHITE, true)
+	elif started and not swinging and not chapter_done and (not free_play or casts==0):
+		_text("← 左へ引いて、離す" if chapter==0 and progress==0 and casts==0 and not free_play else "月を引いて、離す",Vector2(moon.x,minf(moon.y+61.0,size.y-266.0)),17,MUTED,true)
 	for p in particles:
 		var c: Color = p["color"]
 		c.a = clampf(float(p["life"]), 0.0, 1.0) * 0.8
 		draw_circle(p["pos"], 1.8, c)
 	if chapter_done:
-		var glow := (0.5 if reduced_motion else 0.5+sin(elapsed)*0.1)*minf(1.0,finish_time)
+		var glow := _coda_light()*minf(1.0,finish_time*1.8)
 		_glow(Vector2(pivot.x, pivot.y + 80), 75, _tone_color("gold"), glow * 2.0)
 
 func _draw_score() -> void:
+	if free_play:
+		_text(PALETTES[palette_index]["name"],Vector2(size.x*0.5,size.y-137.0),18,_tone_color("gold"),true)
+		return
 	var card_y := size.y - 245.0
 	var card := Rect2(28.0, card_y, size.x - 56.0, 137.0)
 	_panel(card,Color(_tone_color("ink").lightened(0.025),0.90),_tone_color("teal").darkened(0.62),16.0)
@@ -1117,23 +1365,24 @@ func _draw_score() -> void:
 	_text(summary, Vector2(size.x * 0.5, card_y + 108.0), 15, MUTED, true)
 
 func _draw_intro() -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0.02,0.05,0.07,0.52))
-	var y := size.y * 0.36
-	_text("夜を、ひと振り。", Vector2(size.x * 0.5, y), 45, _tone_color("gold"), true)
-	_text("月を引いて、あなたの夜を奏でる。", Vector2(size.x * 0.5, y + 55.0), 22, WHITE, true)
-	_text("鐘の響きが、星と水面に光を広げる。", Vector2(size.x * 0.5, y + 92.0), 22, WHITE, true)
-	_text("引く、離す。ひと振りから、夜がひらく。",Vector2(size.x*0.5,start_rect.position.y-25),15,MUTED,true)
-	_button(start_rect,"音と光の夜をはじめる",true)
-	_button(tour_rect,"星を灯す遊び（つづき）" if not journey_resume.is_empty() or _resume_chapter()>0 else "星を灯す遊びもしてみる")
-	_text("この操作で音が有効になります。途中でミュートできます。", Vector2(size.x * 0.5, start_rect.end.y + 34.0), 14, MUTED, true)
-	_text("つくる・奏でる・もう一度。", Vector2(size.x * 0.5, size.y - 44.0), 15, Color("7b9da2"), true)
+	_button(start_rect,"奏でる",true)
+	_text("星のつづき" if not journey_resume.is_empty() or _resume_chapter()>0 else "星を灯す遊び",Vector2(tour_rect.get_center().x,tour_rect.position.y+43.0),16,MUTED,true)
+	# A quiet speaker mark conveys sound without another paragraph of copy.
+	var at := Vector2(start_rect.end.x+21.0,start_rect.get_center().y)
+	var c := Color(MUTED,0.68)
+	draw_colored_polygon(PackedVector2Array([at+Vector2(-5,-4),at+Vector2(0,-4),at+Vector2(6,-9),at+Vector2(6,9),at+Vector2(0,4),at+Vector2(-5,4)]),c)
+	if muted:
+		draw_line(at+Vector2(10,-7),at+Vector2(18,7),c,1.0,true)
+	else:
+		draw_arc(at+Vector2(6,0),8.0,-0.7,0.7,12,c,1.0,true)
+		draw_arc(at+Vector2(6,0),13.0,-0.7,0.7,16,c,1.0,true)
 
 func _draw_help() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.02,0.04,0.06,0.87))
 	var cx := size.x * 0.5
 	var y := size.y * 0.26
 	_text("月の奏で方", Vector2(cx,y), 34,_tone_color("gold"),true)
-	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "金の輪と、前の折り返しを見比べよう。", "失敗しても音は残る。何度でも奏でよう。", "", "← →：角度を調整　Space：放す", "R：引き直す　M：ミュート　P：一時停止"]
+	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "金の輪と、前の折り返しを見比べよう。", "失敗しても音は残る。何度でも奏でよう。", "", "← →：角度を調整　Space：放す", "R：引き直す　M：ミュート　P：一時停止 / 再開"]
 	if _goal_kind() in ["relay", "duet"]:
 		lines[0] = "今度は、小さな月の光を狙う。"
 		lines[1] = "外側の鐘を通して、中央の鐘へ戻す。"
@@ -1144,7 +1393,7 @@ func _draw_help() -> void:
 	if free_play:
 		lines[0] = "光の輪のない、自由な夜。"
 		lines[1] = "月を引いて放すと、鐘が歌う。"
-		lines[2] = "左上で速さを変えて、音を奏で分けよう。"
+		lines[2] = "左上の重力で、振れ方を奏で分けよう。"
 		lines[5] = "右下で夜の色と、響きの手触りが変わる。"
 	for i in range(lines.size()):
 		_text(lines[i],Vector2(cx,y+54.0+float(i)*34.0),20,WHITE,true)
@@ -1169,6 +1418,7 @@ func _load_save() -> void:
 		muted = bool(config.get_value("settings","muted",false))
 		palette_index = clampi(int(config.get_value("settings","palette",0)),0,2)
 		palette_from = palette_index
+		saved_gravity_index = clampi(int(config.get_value("settings","gravity",1)),0,2)
 		var stored_resume = config.get_value("journey","resume",{})
 		if stored_resume is Dictionary:
 			journey_resume = stored_resume
@@ -1191,6 +1441,9 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	if not _checkpoint_number(data.get("version"),1,1,true):
 		return null
 	if not _checkpoint_number(data.get("revision"),0,1e9,true) or not data.get("muted") is bool or not _checkpoint_number(data.get("palette"),0,2,true):
+		return null
+	var gravity = data.get("gravity",1)
+	if not _checkpoint_number(gravity,0,2,true):
 		return null
 	var best = data.get("best")
 	var journey = data.get("journey")
@@ -1224,6 +1477,7 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	config.set_value("meta","revision",int(data["revision"]))
 	config.set_value("settings","muted",data["muted"])
 	config.set_value("settings","palette",int(data["palette"]))
+	config.set_value("settings","gravity",int(gravity))
 	config.set_value("journey","resume",clean_journey)
 	config.set_value("garden","scene",clean_garden)
 	for i in range(best.size()):
@@ -1238,7 +1492,12 @@ func _save() -> void:
 	config.set_value("meta","revision",save_revision)
 	config.set_value("settings","muted",muted)
 	config.set_value("settings","palette",palette_index)
-	if not free_play:
+	if free_play:
+		saved_gravity_index = gravity_index
+	config.set_value("settings","gravity",saved_gravity_index)
+	if transition_phase==1 and not transition_resume.is_empty():
+		journey_resume = transition_resume.duplicate()
+	elif not free_play:
 		journey_resume = _snapshot_journey()
 	config.set_value("journey","resume",journey_resume)
 	if free_play:
@@ -1250,11 +1509,11 @@ func _save() -> void:
 	if OS.has_feature("web"):
 		# A versioned JSON checkpoint contains only the small game-state schema.
 		# Storage may be blocked by browser policy; keep filesystem saving intact.
-		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters}
+		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters}
 		JavaScriptBridge.eval("(function(){try{window.localStorage.setItem("+JSON.stringify(WEB_SAVE_KEY)+","+JSON.stringify(JSON.stringify(checkpoint))+");}catch(e){}})()")
 
 func _publish_state() -> void:
 	# A read-only public QA snapshot. It cannot alter gameplay or storage.
 	if OS.has_feature("web"):
-		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
+		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		JavaScriptBridge.eval("window.moonPendulumState = " + JSON.stringify(state) + ";")
