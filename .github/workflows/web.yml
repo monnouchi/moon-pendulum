@@ -48,7 +48,8 @@ jobs:
           set -euo pipefail
           GODOT="Godot_v${GODOT_VERSION}-stable_linux.x86_64"
           "$GODOT" --version
-          "$GODOT" --headless --path game --editor --import --quit
+          "$GODOT" --headless --path game --editor --import --quit 2>&1 | tee "$RUNNER_TEMP/godot-import.log"
+          if grep -qE 'SCRIPT ERROR:|^ERROR:' "$RUNNER_TEMP/godot-import.log"; then exit 1; fi
           "$GODOT" --headless --path game --script res://tests/test_game.gd
       - name: Export single-thread Compatibility Web game
         shell: bash
@@ -58,6 +59,9 @@ jobs:
           "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --export-release Web "${GITHUB_WORKSPACE}/docs/index.html"
           test -s docs/index.html && test -s docs/index.js && test -s docs/index.wasm && test -s docs/index.pck
           touch docs/.nojekyll
+          cp LICENSE docs/LICENSE.txt
+          cp game/assets/fonts/LICENSE.txt docs/FONT_LICENSE.txt
+          "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --script res://tests/write_notices.gd -- "${GITHUB_WORKSPACE}/docs/ENGINE_NOTICES.txt"
       - name: Upload downloadable Web export
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

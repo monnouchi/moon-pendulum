@@ -17,6 +17,8 @@ func run() -> void:
 	game = load("res://main.tscn").instantiate()
 	root.add_child(game)
 	check(not game.started, "Audio starts behind a user gesture")
+	game.testing = true
+	game.best_chapters = [0, 0, 0, 0, 0]
 	game.muted = true
 	game._start()
 	check(game.started, "Start gesture enters play")
@@ -43,6 +45,42 @@ func run() -> void:
 			check(game.progress == before + 1, "Repeated turns do not collect extra targets")
 		check(game.chapter_done, "Each chapter can be completed")
 		check(game.casts == targets.size(), "All goals are achievable without hidden extra casts")
+	var advanced_angles := [[-1.0, 1.13, -1.20, 1.05], [-0.98, -1.12, -1.20]]
+	for chapter_index in [3,4]:
+		game._new_chapter(chapter_index)
+		for angle in advanced_angles[chapter_index-3]:
+			var before: int = game.progress
+			game.dragging = true
+			game.theta = angle
+			game._release()
+			for tick in range(300):
+				game._process(1.0/60.0)
+				game._physics_process(1.0/60.0)
+			check(game.progress == before+1, "Advanced light is reachable through the physical relay")
+			for tick in range(240):
+				game._process(1.0/60.0)
+				game._physics_process(1.0/60.0)
+			check(game.progress == before+1, "Relay cannot award repeated goals from one cast")
+		check(game.chapter_done, "Advanced chapter can be completed")
+	game._new_chapter(3)
+	game.dragging = true
+	game.theta = 1.0
+	game._release()
+	check(game.cast_judged and game.feedback.contains("側から"), "Relay teaches its different release direction")
+	game._retry()
+	check(game.feedback.contains("小さな月"), "Relay retry keeps its own relevant instruction")
+	game._new_chapter(4)
+	game.dragging = true
+	game.theta = -0.74
+	game._release()
+	for tick in range(300):
+		game._process(1.0/60.0)
+		game._physics_process(1.0/60.0)
+	check(game.progress == 0 and game.cast_judged, "Duet requires both target turn points, not just ringing")
+	game.best_chapters = [1,1,1,0,0]
+	check(game._resume_chapter() == 3, "Existing three-chapter saves resume at the new relay")
+	game.best_chapters = [1,1,1,1,1]
+	check(game._resume_chapter() == game.CHAPTERS.size(), "Completed campaign resumes in the performance garden")
 	game._new_chapter(1)
 	game._ring(1, 0.8)
 	check(game.echoes[0]["charged"], "Outer bell winds a side escapement")
@@ -93,7 +131,7 @@ func run() -> void:
 	game.paused = false
 	game._new_chapter(0)
 	check(game.progress == 0 and game.casts == 0 and not game.chapter_done, "Chapter restart clears its results")
-	game._new_chapter(3)
+	game._new_chapter(game.CHAPTERS.size())
 	check(game.free_play and not game.chapter_done, "Final reward opens free performance")
 	game.dragging = true
 	game.theta = -0.8
@@ -104,6 +142,36 @@ func run() -> void:
 	check(game.progress == 0 and not game.chapter_done and game.swinging, "Free performance has no scoring / forced completion")
 	game._new_chapter(0)
 	check(not game.free_play and game.tempo_index == 1, "Return to chapters restores standard physics")
+	game._new_chapter(0)
+	var held := InputEventKey.new()
+	held.keycode = KEY_LEFT
+	held.pressed = true
+	game._input(held)
+	var first_step: float = game.theta
+	game._advance_keyboard_aim(0.50, -1.0)
+	check(game.theta < first_step - 0.30, "Held direction adjusts continuously without OS repeat")
+	var released_angle: float = game.theta
+	game._advance_keyboard_aim(0.25, 0.0)
+	check(game.theta == released_angle, "Released direction stops angle adjustment")
+	game._retry()
+	game.show_help = false
+	game.paused = false
+	var help_key := InputEventKey.new()
+	help_key.keycode = KEY_H
+	help_key.pressed = true
+	game._input(help_key)
+	check(game.show_help, "Keyboard H opens help")
+	var close_key := InputEventKey.new()
+	close_key.keycode = KEY_ESCAPE
+	close_key.pressed = true
+	game._input(close_key)
+	check(not game.show_help and not game.paused, "Escape closes help without stacking pause")
+	var missing_glyphs: Array[String] = []
+	var source_text := FileAccess.get_file_as_string("res://scripts/main.gd")
+	for ch in source_text:
+		if ch.unicode_at(0) > 127 and not game.FONT.has_char(ch.unicode_at(0)) and ch not in missing_glyphs:
+			missing_glyphs.append(ch)
+	check(missing_glyphs.is_empty(), "All game UI glyphs are bundled: " + str(missing_glyphs))
 	var original_size := root.size
 	for resolution in [Vector2i(390,844), Vector2i(320,568), Vector2i(1200,863)]:
 		root.size = resolution
@@ -115,6 +183,6 @@ func run() -> void:
 		var scale: float = float(resolution.x) / game.size.x
 		check(game.retry_rect.size.y * scale >= 44.0, "Portrait retry touch target is at least 44 physical pixels")
 	root.size = original_size
-	print("PASS: %d gameplay checks, all 12 targets across 3 chapters" % checks)
+	print("PASS: %d gameplay checks, all 19 exercises / 22 lights across 5 chapters" % checks)
 	game.queue_free()
 	quit(0)

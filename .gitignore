@@ -8,3 +8,6 @@
 /game/assets/fonts/*.import
 
 *.import
+
+/game/build_info.gd
+/game/build_info.gd.uid

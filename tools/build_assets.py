@@ -1,6 +1,6 @@
 """Build the original bell samples and bundled font. Python standard library only."""
 from pathlib import Path
-import base64, math, random, struct, wave
+import base64, math, os, re, struct, subprocess, wave
 ROOT = Path(__file__).resolve().parents[1]
 AUDIO = ROOT / 'game/assets/audio'
 AUDIO.mkdir(parents=True, exist_ok=True)
@@ -23,4 +23,13 @@ for index, midi in enumerate(NOTES):
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(data)
 font_dir = ROOT / 'game/assets/fonts'
 (font_dir/'MoonSans.ttf').write_bytes(base64.b64decode((font_dir/'MoonSans.ttf.b64').read_text()))
-print('Built seven original D-major bell samples and bundled Japanese font.')
+revision = os.environ.get('GITHUB_SHA', '')
+if not revision:
+    try:
+        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError):
+        revision = 'local'
+if not re.fullmatch('[0-9a-f]{40}', revision):
+    revision = 'local'
+(ROOT/'game/build_info.gd').write_text('extends RefCounted\nconst COMMIT = "' + revision + '"\n')
+print('Built seven original D-major bell samples, bundled font and build identity.')

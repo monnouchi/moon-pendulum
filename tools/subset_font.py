@@ -27,7 +27,13 @@ for record in font['name'].names:
     names = {1:'Moon Sans', 2:'Regular', 3:'MoonSans-Regular-2026', 4:'Moon Sans Regular', 6:'MoonSans-Regular'}
     if record.nameID in names:
         record.string = names[record.nameID].encode(record.getEncoding())
-output = root/'game/assets/fonts/MoonSans.ttf'
+if 'CFF ' in font:
+    cff = font['CFF '].cff
+    cff.fontNames[0] = 'MoonSans-Regular'
+    top = cff.topDictIndex[0]
+    top.FullName = 'Moon Sans Regular'
+    top.FamilyName = 'Moon Sans'
+output = root/'game/assets/fonts/MoonSans.ttf' 
 font.save(output)
 (output.with_name(output.name+'.b64')).write_text(base64.b64encode(output.read_bytes()).decode()+'\n')
 print(f'Updated {output.name}: {output.stat().st_size:,} bytes')
