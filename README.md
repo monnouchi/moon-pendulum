@@ -5,7 +5,10 @@
 
 ## 奏でる
 
-https://monnouchi.github.io/demo8/
+https://monnouchi.github.io/moon-pendulum/
+
+ソース: [monnouchi/moon-pendulum](https://github.com/monnouchi/moon-pendulum)
+旧 `demo8` の公開URLは自動転送されないため、ブックマークは上記URLへ更新する。
 
 「奏でる」で、自由に奏でる庭へ。
 月を左右へ引いて放す。強さによって鳴る鐘と光の広がりが変わる。
@@ -26,6 +29,7 @@ https://monnouchi.github.io/demo8/
 5つの夜、11課題・15の光。途中でも庭へ寄り道し、続きへ戻れる。
 クリアと途中の状態は端末内に保存。最初から遊ぶ操作は説明画面に分けている。
 Webの小さな記録は localStorage と Godot の user:// に保存し、外部へ送信しない。
+改名後も同じブラウザの記録を引き継ぐため、保存キー `moon-pendulum.demo8.save.v1` と Godot のアプリ名・保存先を維持する。
 
 ## GitHub Pages
 
