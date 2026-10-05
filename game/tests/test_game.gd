@@ -638,6 +638,72 @@ func run() -> void:
 		if ch.unicode_at(0) > 127 and not game.FONT.has_char(ch.unicode_at(0)) and ch not in missing_glyphs:
 			missing_glyphs.append(ch)
 	check(missing_glyphs.is_empty(), "All game UI glyphs are bundled: " + str(missing_glyphs))
+	# Validate both the authored voicing and what the real players receive.
+	game.muted = false
+	game.paused = false
+	game.show_help = false
+	game.transition_phase = 0
+	var pitch_sets: Array = []
+	for night in range(5):
+		game._new_chapter(night)
+		var harmony: Dictionary = game.HARMONY.NIGHTS[night]
+		var pitches: Array = harmony["pitch_classes"]
+		var all_notes: Array = harmony["bells"]+harmony["echoes"]+harmony["replies"]+[harmony["bass"]]
+		for event in harmony["base"]:
+			all_notes.append(event[1])
+		for layer in harmony["layers"]:
+			for event in layer:
+				all_notes.append(event[1])
+		check(all_notes.all(func(m):return int(m)%12 in pitches),"Every bell, moon, reply, phrase and bass belongs to night %d's intended harmony" % night)
+		check(int(harmony["bass"])%12==int(harmony["base"][0][1])%12,"Completion bass anchors the same home as the first foundation note")
+		var signature: Array = []
+		for i in range(7):
+			var slot: int = game.voice%12
+			game._ring(i,0.5)
+			var heard_midi: float = game.HARMONY.BELL_REFERENCE[i]+12.0*log(game.players[slot].pitch_scale)/log(2.0)
+			check(absf(heard_midi-int(harmony["bells"][i]))<0.001 and game.note_label==harmony["bell_names"][i],"A real physical bell and its label use the selected night, not a global D table")
+			signature.append(int(harmony["bells"][i])-int(harmony["bells"][0]))
+		check(signature not in pitch_sets,"The night changes interval structure rather than only transposing the same seven bells")
+		pitch_sets.append(signature)
+		for side in range(2):
+			var slot: int = game.voice%12
+			game._play_echo(side,0.5)
+			var echo_index: int = game._echo_index(side)
+			var heard_midi: float = game.HARMONY.ECHO_REFERENCE[echo_index]+12.0*log(game.players[slot].pitch_scale)/log(2.0)
+			check(absf(heard_midi-int(harmony["echoes"][echo_index]))<0.001,"A physical small moon stays inside the current night harmony")
+		game.last_pull_note = -1
+		game.pull_note_cooldown = 0.0
+		game.theta = -0.32
+		var preview_slot: int = game.voice%12
+		game._preview_pull()
+		check(absf(game.players[preview_slot].pitch_scale-float(game.bell_rates[night][2]))<0.00001,"Pull preview uses the same night pitch as the eventual physical bell")
+		var glyphs_ok := true
+		for label in harmony["bell_names"]+harmony["echo_names"]:
+			for ch in str(label):
+				glyphs_ok = glyphs_ok and game.FONT.has_char(ch.unicode_at(0))
+		check(glyphs_ok,"Every night-specific pitch label is available in the bundled font")
+		game.night_music.advance(1.0/60.0,true,1.0)
+		game.night_music.unlock(harmony["layers"].size(),true,true)
+		var tonic_bass_ok := false
+		for slot in range(16):
+			if game.night_music.voices[slot]["role"]=="bass" and game.night_music.voices[slot]["generation"]==game.night_music.generation:
+				tonic_bass_ok = game.night_music.players[slot].stream==game.night_music.bass_streams[night] and game.night_music.players[slot].pitch_scale==1.0
+		check(tonic_bass_ok,"The completion tonic is baked into the selected sample so Web loops never revert to another key")
+	check(game.night_music.bass_streams[0]==game.night_music.bass_streams[4],"The returning D night reuses its sustained tonic without a fifth bass allocation")
+	game._new_chapter(1)
+	game.night_music.advance(1.0/60.0,true,1.0)
+	game.night_music.reply(70,0)
+	var minor_reply_ok := false
+	for slot in range(16):
+		if game.night_music.voices[slot]["role"]=="reply" and game.night_music.voices[slot]["generation"]==game.night_music.generation:
+			minor_reply_ok = absf(game.night_music.players[slot].pitch_scale-pow(2.0,-2.0/12.0))<0.00001
+	check(minor_reply_ok,"The first Dorian moon reply is C5 rather than the old global F-sharp5")
+	game._new_chapter(5)
+	for i in range(7):
+		var slot: int = game.voice%12
+		game._sound(i,0.5)
+		check(game.players[slot].pitch_scale==1.0 and game._bell_name(i)==game.NOTE_NAMES[i],"Garden returns every reused bell voice to its original D pentatonic pitch")
+	game.muted = true
 	var original_size := root.size
 	for resolution in [Vector2i(390,844), Vector2i(320,568), Vector2i(1200,863)]:
 		root.size = resolution
@@ -660,7 +726,7 @@ func run() -> void:
 			var clear_of_notes := true
 			for i in range(7):
 				var note_at: Vector2 = game._point(game.BELL_ANGLES[i],game.length+15.0)+Vector2(0,35)
-				var note_width: float = game.FONT.get_string_size(game.NOTE_NAMES[i],HORIZONTAL_ALIGNMENT_LEFT,-1,11).x
+				var note_width: float = game.FONT.get_string_size(game._bell_name(i),HORIZONTAL_ALIGNMENT_LEFT,-1,11).x
 				clear_of_notes = clear_of_notes and not weak_word.intersects(Rect2(note_at-Vector2(note_width*0.5,13),Vector2(note_width,17)))
 			for side in range(2):
 				var note_at: Vector2 = game._echo_pivot(side)+Vector2(0,game._echo_length()+45.0)

@@ -7,7 +7,7 @@ from build_music import build as build_music
 ROOT = Path(__file__).resolve().parents[1]
 AUDIO = ROOT / 'game/assets/audio'
 AUDIO.mkdir(parents=True, exist_ok=True)
-NOTES = [50, 57, 62, 64, 66, 71, 74]  # D, A, D, E, F-sharp, B, D: D-major pentatonic.
+NOTES = [50, 57, 62, 64, 66, 71, 74]  # Fixed reference recordings; night_harmony.gd selects each night's playback pitches.
 BANKS = [
     ('bell', .009, [(1,.62,.72),(2,.20,.48),(3,.10,.31),(4,.04,.17)]),
     ('warm', .017, [(1,.82,1.05),(2,.14,.74),(3,.035,.42),(4,.01,.20)]),

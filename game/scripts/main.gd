@@ -4,6 +4,7 @@ extends Node2D
 
 const BUILD = preload("res://build_info.gd")
 const NIGHT_MUSIC = preload("res://scripts/night_music.gd")
+const HARMONY = preload("res://scripts/night_harmony.gd")
 const FONT = preload("res://assets/fonts/MoonSerifUI.tres")
 const BELL_ANGLES = [-0.96, -0.66, -0.34, 0.0, 0.34, 0.66, 0.96]
 const NOTE_NAMES = ["D3", "A3", "D4", "E4", "F♯4", "B4", "D5"]
@@ -84,6 +85,8 @@ var audio_stop_after: Array[bool] = []
 var sounds: Array[AudioStreamWAV] = []
 var sound_banks: Array = []
 var echo_banks: Array = []
+var bell_rates: Array[Array] = []
+var echo_rates: Array[Array] = []
 var coda_started := false
 var night_music
 var palette_index := 0
@@ -162,6 +165,15 @@ func _ready() -> void:
 		echo_banks.append(echoes_bank)
 	for stream in sound_banks[0]:
 		sounds.append(stream)
+	for harmony in HARMONY.NIGHTS:
+		var bell_row: Array[float] = []
+		var echo_row: Array[float] = []
+		for i in range(7):
+			bell_row.append(pow(2.0,float(harmony["bells"][i]-HARMONY.BELL_REFERENCE[i])/12.0))
+		for i in range(4):
+			echo_row.append(pow(2.0,float(harmony["echoes"][i]-HARMONY.ECHO_REFERENCE[i])/12.0))
+		bell_rates.append(bell_row)
+		echo_rates.append(echo_row)
 	# Keep the physical bell pool independent of the continuing night score.
 	for i in range(BELL_VOICES):
 		var player := AudioStreamPlayer.new()
@@ -345,7 +357,7 @@ func _physics_process(delta: float) -> void:
 func _ring(index: int, strength: float = 0.8) -> void:
 	bell_glows[index] = strength
 	bell_cooldowns[index] = 0.34
-	note_label = NOTE_NAMES[index]
+	note_label = _bell_name(index)
 	_sound(index, strength)
 	# An outer bell winds a little escapement. The returning central bell
 	# releases it, so the echo is an actual second pendulum with its own motion.
@@ -446,7 +458,7 @@ func _turn_advice_word_rect(cue: Dictionary) -> Rect2:
 		var bell_at := _point(float(BELL_ANGLES[i]),length+15.0)
 		blockers.append(Rect2(bell_at-Vector2(17,17),Vector2(34,34)))
 		if _pitch_labels_visible():
-			var note_width := FONT.get_string_size(NOTE_NAMES[i],HORIZONTAL_ALIGNMENT_LEFT,-1,11).x
+			var note_width := FONT.get_string_size(_bell_name(i),HORIZONTAL_ALIGNMENT_LEFT,-1,11).x
 			var note_at := bell_at+Vector2(0,35)
 			blockers.append(Rect2(note_at-Vector2(note_width*0.5+6,16),Vector2(note_width+12,22)))
 	for e in echoes:
@@ -564,7 +576,7 @@ func _draw_echoes() -> void:
 					var previous := _echo_point(side,last_echo_turns[side])
 					draw_arc(previous,6.0,0.0,TAU,20,Color(WHITE,0.50),1.0,true)
 		if _pitch_labels_visible():
-			_text(("D4" if side==0 else "B4") if chapter<2 else ("F♯4" if side==0 else "D5"),ep+Vector2(0.0,el+45.0),11,MUTED,true)
+			_text(str(HARMONY.NIGHTS[_harmony_index()]["echo_names"][_echo_index(side)]),ep+Vector2(0.0,el+45.0),11,MUTED,true)
 
 func _tone_color(key: String) -> Color:
 	var a: Color = palette_origin.get(key,PALETTES[palette_from][key])
@@ -583,19 +595,20 @@ func _cycle_palette() -> void:
 	_save()
 	_publish_state()
 
-func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.0) -> void:
+func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.0, pitch: float = 1.0) -> void:
 	if muted or not started or paused or show_help:
 		return
 	night_music.duck()
 	var slot := voice % BELL_VOICES
 	voice += 1
-	_play_voice(stream,strength,base_db,slot)
+	_play_voice(stream,strength,base_db,slot,pitch)
 
-func _play_voice(stream: AudioStreamWAV, strength: float, base_db: float, slot: int) -> void:
+func _play_voice(stream: AudioStreamWAV, strength: float, base_db: float, slot: int, pitch: float = 1.0) -> void:
 	if muted or not started or paused or show_help:
 		return
 	var player := players[slot]
 	player.stream = stream
+	player.pitch_scale = pitch
 	audio_base[slot] = base_db + strength*6.0
 	audio_gain[slot] = _transition_audio_gain()
 	audio_duration[slot] = 0.0
@@ -631,19 +644,28 @@ func _coda_light() -> float:
 		pulse += exp(-distance*distance)*0.50
 	return 0.42+pulse
 
+func _harmony_index() -> int:
+	return 0 if free_play else chapter
+
+func _bell_name(index: int) -> String:
+	return str(HARMONY.NIGHTS[_harmony_index()]["bell_names"][index])
+
+func _echo_index(side: int) -> int:
+	return side + (2 if chapter >= 2 else 0)
+
 func _sound(index: int, strength: float = 0.8) -> void:
-	_play_sample(sound_banks[palette_index][index],strength)
+	_play_sample(sound_banks[palette_index][index],strength,-13.0,float(bell_rates[_harmony_index()][index]))
 
 func _play_echo(side: int, strength: float) -> void:
-	var index := side + (2 if chapter >= 2 else 0)
-	_play_sample(echo_banks[palette_index][index],strength,-15.0)
+	var index := _echo_index(side)
+	_play_sample(echo_banks[palette_index][index],strength,-15.0,float(echo_rates[_harmony_index()][index]))
 
 func _preview_pull() -> void:
 	var note := clampi(int(round((theta+0.96)/0.32)),0,6)
 	if note != last_pull_note and pull_note_cooldown <= 0.0:
 		last_pull_note = note
 		pull_note_cooldown = 0.10
-		_play_sample(sound_banks[1][note],0.25,-24.0)
+		_play_sample(sound_banks[1][note],0.25,-24.0,float(bell_rates[_harmony_index()][note]))
 
 
 func _apply_voice_gain(slot: int) -> void:
@@ -1473,7 +1495,7 @@ func _draw_stage() -> void:
 		draw_line(pos + Vector2(-11,7), pos + Vector2(11,7), Color("a9b69b").lerp(WHITE, glow), 1.5)
 		draw_circle(pos + Vector2(0,10), 2.0, _tone_color("gold"))
 		if _pitch_labels_visible():
-			_text(NOTE_NAMES[i], pos + Vector2(0, 35), 11, MUTED, true)
+			_text(_bell_name(i), pos + Vector2(0, 35), 11, MUTED, true)
 	if started and not chapter_done and _goal_kind() == "main":
 		var target := _target()
 		var target_pos := _point(target)

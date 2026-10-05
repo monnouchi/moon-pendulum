@@ -3,18 +3,13 @@ extends Node
 const VOICES = 16
 const BASS_LOOP_BEGIN = 30000
 const BASS_LOOP_END = 90000
-const SCORES = [
-	{"bpm":58.0,"steps":16,"bass":38,"base":[[0,50,0.68],[8,57,0.52],[12,62,0.40]],"layers":[[[4,74,0.72],[12,76,0.60]],[[2,78,0.64],[8,81,0.62],[14,78,0.55]],[[0,86,0.60],[6,83,0.56],[10,81,0.58],[15,83,0.46]]]},
-	{"bpm":66.0,"steps":12,"bass":45,"base":[[0,50,0.64],[6,57,0.56]],"layers":[[[0,74,0.65],[6,78,0.58]],[[3,81,0.62],[9,76,0.54]],[[2,83,0.58],[8,81,0.54]],[[5,86,0.56],[11,83,0.50]]]},
-	{"bpm":54.0,"steps":18,"bass":47,"base":[[0,50,0.60],[12,59,0.44]],"layers":[[[2,74,0.66],[8,71,0.54]],[[6,76,0.60],[14,78,0.54]]]},
-	{"bpm":68.0,"steps":16,"bass":40,"base":[[0,50,0.62],[8,59,0.48]],"layers":[[[0,74,0.64],[6,78,0.60],[11,81,0.54]],[[3,76,0.60],[8,83,0.56],[14,86,0.50]]]},
-	{"bpm":62.0,"steps":24,"bass":38,"base":[[0,50,0.66],[12,57,0.54]],"layers":[[[0,74,0.65],[6,78,0.58],[12,81,0.60],[18,74,0.54]],[[3,76,0.60],[9,83,0.56],[15,78,0.56],[21,81,0.50]],[[2,86,0.56],[8,83,0.52],[14,81,0.54],[20,83,0.50]],[[5,78,0.56],[11,81,0.54],[17,86,0.56],[23,86,0.46]]]}
-]
+const SCORES = preload("res://scripts/night_harmony.gd").NIGHTS
 var players: Array[AudioStreamPlayer] = []
 var applied_db: Array[float] = []
 var voices: Array[Dictionary] = []
 var instruments: Array[Array] = []
 var bass_stream: AudioStreamWAV
+var bass_streams: Array[AudioStreamWAV] = []
 var night := -1
 var pieces := 0
 var completed := false
@@ -35,15 +30,22 @@ var reply_sides: Array[bool] = [false,false]
 
 func _ready() -> void:
 	set_process(false)
+	var bass_by_midi: Dictionary = {}
 	for index in range(SCORES.size()):
 		var bank: Array = []
 		for kind in ["base","left","right"]:
 			bank.append(load("res://assets/audio/music_%d_%s.wav" % [index,kind]))
 		instruments.append(bank)
-	bass_stream = load("res://assets/audio/music_bass.wav").duplicate()
-	bass_stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-	bass_stream.loop_begin = BASS_LOOP_BEGIN
-	bass_stream.loop_end = BASS_LOOP_END
+		var midi: int = int(SCORES[index]["bass"])
+		if not bass_by_midi.has(midi):
+			var path := "res://assets/audio/music_bass.wav" if midi==38 else "res://assets/audio/music_bass_%d.wav" % midi
+			var stream: AudioStreamWAV = load(path).duplicate()
+			stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+			stream.loop_begin = BASS_LOOP_BEGIN
+			stream.loop_end = BASS_LOOP_END
+			bass_by_midi[midi] = stream
+		bass_streams.append(bass_by_midi[midi])
+	bass_stream = bass_streams[0]
 	for index in range(VOICES):
 		var player := AudioStreamPlayer.new()
 		player.volume_db = -80.0
@@ -61,6 +63,7 @@ func begin(index: int, restored_pieces: int = 0, restored_complete: bool = false
 		leave(0.32)
 	generation += 1
 	night = clampi(index,0,SCORES.size()-1)
+	bass_stream = bass_streams[night]
 	pieces = clampi(restored_pieces,0,SCORES[night]["layers"].size())
 	completed = restored_complete
 	time = 0.0
@@ -134,7 +137,7 @@ func reply(cast: int, side: int) -> void:
 	reply_sides[side] = true
 	replies += 1
 	if enabled:
-		_note(side,[83,86][side] if night==4 else [78,81][side],0.65,"reply")
+		_note(side,int(SCORES[night]["replies"][side]),0.65,"reply")
 
 func clear_replies() -> void:
 	for index in range(players.size()):
@@ -161,7 +164,10 @@ func advance(delta: float, allowed: bool, transition_gain: float) -> void:
 		enabled = true
 		for index in range(players.size()):
 			if _active(players[index]) and int(voices[index]["generation"])==generation and not voices[index]["tail"]:
+				var pitch := players[index].pitch_scale
 				players[index].stream_paused = false
+				# Web Sample recreates its source on resume; restore the held note's rate.
+				players[index].pitch_scale = pitch
 				_tween(index,1.0,0.18)
 		if completed:
 			_start_bass(false)
@@ -189,7 +195,9 @@ func _start_bass(entry: bool) -> void:
 	if entry:
 		bass_entries += 1
 	var offset := 0.0 if entry else float(BASS_LOOP_BEGIN)/float(bass_stream.mix_rate)
-	var slot := _play(bass_stream,int(SCORES[night]["bass"]),38,0.80,-10.0,"bass",offset,1.0 if entry else 0.0)
+	# Baked tonics survive Web Sample's internal loop restart without retuning.
+	var midi: int = int(SCORES[night]["bass"])
+	var slot := _play(bass_stream,midi,midi,0.80,-10.0,"bass",offset,1.0 if entry else 0.0)
 	if not entry:
 		_tween(slot,1.0,0.45)
 

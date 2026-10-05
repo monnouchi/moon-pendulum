@@ -1,9 +1,11 @@
 """Original, soft musical voices for the five night scores (standard library).
 
 Notes are rendered before export because Web Sample playback has no effect bus.
-The score itself lives in night_music.gd; these are its instruments, not mixes.
+The scores and bell harmony live in night_harmony.gd; these are instruments, not mixes.
 """
+import json
 import math
+import re
 import struct
 import wave
 
@@ -50,10 +52,12 @@ def note(path, midi, attack, decay, duration, weights, pan, breath=False):
         frames.append((direct*left+reflection*right,direct*right+reflection*left))
     write_wave(path,frames)
 
-def bass(path):
-    # Quantize only this low fundamental by <2 cents so the steady loop closes
-    # on an exact period. The small settling glide is finished before the loop.
-    frequency=RATE/300
+def bass(path, midi=38):
+    # Fit an integer number of cycles into the steady loop (<2.5 cents).
+    # Bake the tonic: Web Sample restarts its source at playback rate 1.
+    intended=440*2**((midi-69)/12)
+    loop_frames=BASS_LOOP_END-BASS_LOOP_BEGIN
+    frequency=round(intended*loop_frames/RATE)*RATE/loop_frames
     phase=0.0
     frames=[]
     for index in range(BASS_LOOP_END):
@@ -72,4 +76,9 @@ def build(audio):
         note(audio/f'music_{index}_base.wav',50,base_attack,base_decay,base_duration,weights,0.0,index==2)
         for side,pan in [('left',-.24),('right',.24)]:
             note(audio/f'music_{index}_{side}.wav',74,attack,decay,duration,weights,pan,index==2)
-    bass(audio/'music_bass.wav')
+    # The JSON-compatible GDScript table is the single musical source of truth.
+    source=(audio.parent.parent/'scripts/night_harmony.gd').read_text()
+    nights=json.loads(re.search(r'const NIGHTS = (\[.*?\])\n',source,re.S).group(1))
+    for midi in sorted({int(night['bass']) for night in nights}):
+        filename='music_bass.wav' if midi==38 else f'music_bass_{midi}.wav'
+        bass(audio/filename,midi)
