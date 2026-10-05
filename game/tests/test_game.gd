@@ -16,6 +16,17 @@ func _initialize() -> void:
 func playback_id(player: AudioStreamPlayer) -> int:
 	return player.get_stream_playback().get_instance_id()
 
+func cast_until_judged(angle: float) -> void:
+	game._retry()
+	game.dragging = true
+	game.theta = angle
+	game._release()
+	for tick in range(300):
+		game._process(1.0/60.0)
+		game._physics_process(1.0/60.0)
+		if game.cast_judged:
+			break
+
 func run() -> void:
 	game = load("res://main.tscn").instantiate()
 	root.add_child(game)
@@ -274,6 +285,72 @@ func run() -> void:
 	game._input(pointer)
 	check(game.theta==keyboard_angle,"Mouse motion cannot hijack keyboard aiming")
 	game._retry()
+	# Advice follows a measured failed turn. The first miss stays visual;
+	# only consecutive attempts add a short word near that same stationary mark.
+	game._new_chapter(0)
+	cast_until_judged(-0.18)
+	check(game.progress==0 and game.miss_streak==1 and game.turn_advice.size()==1,"A measured miss adds one local comparison without earning a star")
+	check(game.turn_advice[0]["word"]=="" and game.feedback_timer==0.0,"A first miss uses the turn mark without another text instruction")
+	check(is_equal_approx(game.turn_advice[0]["angle"],game.last_turn) and is_equal_approx(game.turn_advice[0]["target"],game._target()),"The gap compares the actual fold-back with the current target")
+	game._process(1.81)
+	check(game.turn_advice.is_empty(),"The bright comparison expires instead of remaining on screen")
+	cast_until_judged(-0.18)
+	check(game.miss_streak==2 and game.turn_advice[0]["word"]=="もう少し大きく","Consecutive short pulls receive one concise local word")
+	game._begin_pull(game._point(-0.18))
+	check(game.turn_advice.is_empty() and game.miss_streak==2,"Beginning another pull clears the old comparison while preserving the attempt sequence")
+	cast_until_judged(-0.58)
+	check(game.progress==1 and game.turn_advice.is_empty() and game.miss_streak==0,"A real successful cast removes the advice and resets consecutive misses")
+	game._new_chapter(0)
+	cast_until_judged(-0.8)
+	cast_until_judged(-0.8)
+	check(game.turn_advice[0]["word"]=="少しやさしく","An overshoot asks for a gentler pull")
+	game._new_chapter(0)
+	cast_until_judged(0.6)
+	cast_until_judged(0.6)
+	check(game.turn_advice[0]["word"]=="反対側から","Wrong-side fold-backs receive the relevant short word")
+	game._new_chapter(1)
+	cast_until_judged(-0.8)
+	check(game.miss_streak==1 and game.turn_advice.size()==2 and game.night_music.pieces==0,"Two missed duet moons count as one unsuccessful attempt without a music layer")
+	cast_until_judged(-0.8)
+	check(game.miss_streak==2 and game.turn_advice.all(func(c): return c["word"]=="もう少し大きく"),"Both duet marks explain the same repeated weak transfer")
+	game._retry()
+	check(game.turn_advice.is_empty() and game.miss_streak==2,"Retry removes displayed advice without making consecutive misses look like a first try")
+	game._new_chapter(1)
+	cast_until_judged(0.5)
+	check(game.turn_advice.size()==1 and game.turn_advice[0]["side"]==-1 and is_equal_approx(game.turn_advice[0]["angle"],game.last_turn),"An uncharged duet compares the real primary turn, never an invented secondary turn")
+	game._new_chapter(3)
+	cast_until_judged(-0.8)
+	cast_until_judged(-0.8)
+	check(game.turn_advice.size()==1 and game.turn_advice[0]["side"]==0 and game.turn_advice[0]["word"]=="もう少し大きく","Relay advice follows its measured secondary moon")
+	var advice_help := InputEventKey.new()
+	advice_help.keycode = KEY_H
+	advice_help.pressed = true
+	game._input(advice_help)
+	check(game.turn_advice.is_empty() and game.miss_streak==0,"Help clears the old advice before play resumes")
+	game._input(advice_help)
+	cast_until_judged(-0.8)
+	var advice_pause := InputEventKey.new()
+	advice_pause.keycode = KEY_P
+	advice_pause.pressed = true
+	game._input(advice_pause)
+	check(game.turn_advice.is_empty() and game.miss_streak==0,"Pause also clears a stale comparison")
+	game._input(advice_pause)
+	cast_until_judged(-0.8)
+	game._notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
+	check(game.turn_advice.is_empty() and game.miss_streak==0,"Focus loss cannot revive a previous attempt's advice")
+	game.paused = false
+	cast_until_judged(-0.8)
+	game._enter_garden()
+	check(game.turn_advice.is_empty() and game.miss_streak==0,"Entering the garden removes journey advice")
+	game._return_to_journey()
+	check(game.turn_advice.is_empty() and game.miss_streak==0,"A saved journey resumes without old advice")
+	game._new_chapter(1)
+	game.reduced_motion = true
+	cast_until_judged(-0.8)
+	cast_until_judged(-0.8)
+	check(game.turn_advice.size()==2 and game.turn_advice.all(func(c):return not c["word"].is_empty()),"Reduced motion retains the readable turn comparison and repeated-miss words")
+	game.reduced_motion = false
+	game._new_chapter(0)
 	var checkpoint := {"version":1,"revision":12,"muted":true,"palette":2,"journey":{"chapter":3,"progress":1,"casts":3,"perfects":1},"garden":{"lights":[0.1,0.2,0.3,0.4,0.5,0.6,0.7],"energy":0.73},"best":[1,1,1,0,0]}
 	var restored: ConfigFile = game._config_from_checkpoint(JSON.parse_string(JSON.stringify(checkpoint)))
 	check(restored!=null and restored.get_value("meta","revision")==12,"Versioned JSON checkpoint restores its revision")
@@ -515,6 +592,25 @@ func run() -> void:
 		check(visible.encloses(game.start_rect) and visible.encloses(game.tour_rect),"Minimal introduction controls fit the viewport")
 		check(game.start_rect.position.y>=game.pivot.y+game.length+57.0,"Hero moon has clear space above the start action")
 		check(game.start_rect.size.y*scale>=44.0,"Portrait start action remains a full touch target")
+		for direction in [-1.0,1.0]:
+			game._new_chapter(1)
+			cast_until_judged(direction*0.5)
+			cast_until_judged(direction*0.5)
+			var weak_word: Rect2 = game._turn_advice_word_rect(game.turn_advice[0])
+			check(weak_word.has_area() and visible.encloses(weak_word),"Repeated weak-transfer advice remains visible inside either side of each viewport")
+			var clear_of_notes := true
+			for i in range(7):
+				var note_at: Vector2 = game._point(game.BELL_ANGLES[i],game.length+15.0)+Vector2(0,35)
+				var note_width: float = game.FONT.get_string_size(game.NOTE_NAMES[i],HORIZONTAL_ALIGNMENT_LEFT,-1,11).x
+				clear_of_notes = clear_of_notes and not weak_word.intersects(Rect2(note_at-Vector2(note_width*0.5,13),Vector2(note_width,17)))
+			for side in range(2):
+				var note_at: Vector2 = game._echo_pivot(side)+Vector2(0,game._echo_length()+45.0)
+				clear_of_notes = clear_of_notes and not weak_word.intersects(Rect2(note_at-Vector2(16,13),Vector2(32,17)))
+			check(clear_of_notes,"Local weak-transfer advice cannot cover primary or secondary note names")
+		game._new_chapter(1)
+		cast_until_judged(-0.8)
+		cast_until_judged(-0.8)
+		check(game.turn_advice.all(func(c):return game._turn_advice_word_rect(c).has_area() and visible.encloses(game._turn_advice_word_rect(c))),"Both missed duet words fit even the narrowest viewport")
 	root.size = original_size
 	print("PASS: %d gameplay checks, all 11 optional exercises / 15 lights across 5 nights" % checks)
 	game.paused = true

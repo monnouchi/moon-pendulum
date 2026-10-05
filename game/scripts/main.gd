@@ -100,6 +100,10 @@ var last_turn := 0.0
 var has_last_turn := false
 var last_echo_turns: Array[float] = [0,0]
 var has_last_echo_turn: Array[bool] = [false,false]
+var turn_advice: Array[Dictionary] = []
+var miss_streak := 0
+var advice_cast := -1
+const TURN_ADVICE_SECONDS = 1.8
 var last_pull_note := -1
 var pull_note_cooldown := 0.0
 var voice := 0
@@ -189,6 +193,7 @@ func _notification(what: int) -> void:
 		_pause_for_focus_loss()
 
 func _cancel_aim() -> void:
+	_clear_turn_advice()
 	if dragging:
 		dragging = false
 		keyboard_aim = false
@@ -286,6 +291,9 @@ func _process(delta: float) -> void:
 			bell_cooldowns[i] = maxf(0.0, bell_cooldowns[i] - delta)
 		target_pulse = maxf(0.0, target_pulse - delta * 0.55)
 		feedback_timer = maxf(0.0, feedback_timer - delta)
+		for cue in turn_advice:
+			cue["remaining"] -= delta
+		turn_advice = turn_advice.filter(func(cue): return float(cue["remaining"])>0.0)
 		for p in particles:
 			p["pos"] += p["velocity"] * delta
 			p["velocity"] *= pow(0.42, delta)
@@ -404,6 +412,98 @@ func _echo_target(side: int) -> float:
 		return (-1.0 if side == 0 else 1.0) * absf(_target()) * 0.96
 	return _target()
 
+func _clear_turn_advice() -> void:
+	turn_advice.clear()
+	miss_streak = 0
+	advice_cast = -1
+
+func _record_turn_advice(side: int, angle: float, target: float, word: String = "") -> void:
+	if advice_cast!=casts:
+		miss_streak += 1
+		advice_cast = casts
+	if word.is_empty():
+		word = "反対側から" if signf(angle)!=signf(target) else ("もう少し大きく" if absf(angle)<absf(target) else "少しやさしく")
+	turn_advice = turn_advice.filter(func(cue): return int(cue["side"])!=side)
+	turn_advice.append({"side":side,"angle":angle,"target":target,"remaining":TURN_ADVICE_SECONDS,"word":word if miss_streak>=2 else ""})
+	feedback_timer = 0.0
+
+func _turn_advice_for(side: int) -> Dictionary:
+	for cue in turn_advice:
+		if int(cue["side"])==side:
+			return cue
+	return {}
+
+func _turn_advice_word_rect(cue: Dictionary) -> Rect2:
+	if str(cue["word"]).is_empty():
+		return Rect2()
+	var side := int(cue["side"])
+	var font_size := 17 if side<0 else 15
+	var width := FONT.get_string_size(str(cue["word"]),HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x
+	var at := _point(float(cue["angle"])) if side<0 else _echo_point(side,float(cue["angle"]))
+	var blockers: Array[Rect2] = []
+	for i in range(7):
+		var bell_at := _point(float(BELL_ANGLES[i]),length+15.0)
+		blockers.append(Rect2(bell_at-Vector2(17,17),Vector2(34,34)))
+		if _pitch_labels_visible():
+			var note_width := FONT.get_string_size(NOTE_NAMES[i],HORIZONTAL_ALIGNMENT_LEFT,-1,11).x
+			var note_at := bell_at+Vector2(0,35)
+			blockers.append(Rect2(note_at-Vector2(note_width*0.5+6,16),Vector2(note_width+12,22)))
+	for e in echoes:
+		if chapter==0 and _goal_kind()=="main":
+			continue
+		var echo_side := int(e["side"])
+		var ep := _echo_pivot(echo_side)
+		blockers.append(Rect2(ep-Vector2(13,13),Vector2(26,26)))
+		if side<0 and _goal_kind() in ["relay","duet"]:
+			# An uncharged moon can remain still for the whole comparison.
+			blockers.append(Rect2(_echo_point(echo_side,0.0)-Vector2(18,18),Vector2(36,36)))
+			if _goal_kind()=="duet" or echo_side==(0 if _target()<0.0 else 1):
+				blockers.append(Rect2(_echo_point(echo_side,_echo_target(echo_side))-Vector2(21,21),Vector2(42,42)))
+		if _pitch_labels_visible():
+			blockers.append(Rect2(ep+Vector2(-20,_echo_length()+29),Vector2(40,22)))
+	var rect := Rect2()
+	var outward := signf(at.x-size.x*0.5)
+	var above := -44.0 if side<0 else -32.0
+	var below := 68.0 if side<0 else 50.0
+	# Choose against fixed scenery so the word stays still while moons move.
+	for vertical_offset in [above,below,above-24.0,above-48.0,above-72.0]:
+		for move in [0.0,width*0.5+18.0,width+24.0]:
+			var baseline := Vector2(clampf(at.x+outward*move,width*0.5+18.0,size.x-width*0.5-18.0),at.y+vertical_offset)
+			var candidate := Rect2(baseline-Vector2(width*0.5,font_size*1.1),Vector2(width,font_size*1.3))
+			if Rect2(Vector2.ZERO,size).encloses(candidate) and not blockers.any(func(other): return candidate.intersects(other)):
+				rect = candidate
+				break
+		if rect.has_area():
+			break
+	# Hide briefly when a moving pendant crosses the chosen word's space.
+	if rect.intersects(Rect2(_point(theta)-Vector2(36,36),Vector2(72,72))):
+		return Rect2()
+	for e in echoes:
+		if chapter==0 and _goal_kind()=="main":
+			continue
+		if rect.intersects(Rect2(_echo_point(int(e["side"]),float(e["theta"]))-Vector2(15,15),Vector2(30,30))):
+			return Rect2()
+	return rect
+
+func _draw_turn_advice() -> void:
+	if not started or free_play or chapter_done or transition_phase!=0:
+		return
+	for cue in turn_advice:
+		var side := int(cue["side"])
+		var origin := pivot if side<0 else _echo_pivot(side)
+		var radius := length if side<0 else _echo_length()
+		var at := _point(float(cue["angle"])) if side<0 else _echo_point(side,float(cue["angle"]))
+		var a := PI*0.5-float(cue["angle"])
+		var b := PI*0.5-float(cue["target"])
+		var alpha := 1.0 if reduced_motion else minf(1.0,float(cue["remaining"])/0.25)
+		draw_arc(at,8.0 if side<0 else 6.0,0.0,TAU,24,Color(WHITE,0.88*alpha),2.0,true)
+		if absf(a-b)>0.01:
+			draw_arc(origin,radius,minf(a,b),maxf(a,b),32,Color(WHITE,0.46*alpha),2.0,true)
+		var word_rect := _turn_advice_word_rect(cue)
+		if word_rect.has_area():
+			var font_size := 17 if side<0 else 15
+			_text(str(cue["word"]),Vector2(word_rect.get_center().x,word_rect.position.y+font_size*1.1),font_size,Color(WHITE,alpha),true)
+
 func _goal_position() -> Vector2:
 	if _goal_kind() == "relay":
 		return _echo_point(0 if _target() < 0 else 1, _target())
@@ -459,7 +559,7 @@ func _draw_echoes() -> void:
 				draw_arc(ep, el, PI*0.5-target_angle-0.095, PI*0.5-target_angle+0.095, 14, Color(0.91,0.80,0.50,0.32), 4.0, true)
 				if _goal_kind()=="duet" and duet_hits[side] and not cast_judged:
 					draw_circle(beacon,5.0,_tone_color("gold"))
-				if has_last_echo_turn[side] and (not swinging or cast_judged or dragging):
+				if has_last_echo_turn[side] and (not swinging or cast_judged or dragging) and _turn_advice_for(side).is_empty():
 					var previous := _echo_point(side,last_echo_turns[side])
 					draw_arc(previous,6.0,0.0,TAU,20,Color(WHITE,0.50),1.0,true)
 		if _pitch_labels_visible():
@@ -648,6 +748,7 @@ func _judge_turn() -> void:
 				cast_judged = true
 				feedback = "もう少し大きく引いて、外側の鐘へ。"
 				feedback_timer = 5.0
+				_record_turn_advice(-1,theta,signf(theta)*0.66,"もう少し大きく")
 				_publish_state()
 				return
 		return
@@ -666,11 +767,13 @@ func _judge_turn() -> void:
 		else:
 			feedback = "少しやさしく。光の近くで折り返そう。"
 		feedback_timer = 5.0
+		_record_turn_advice(-1,theta,target)
 	_publish_state()
 
 func _award_goal(error: float, where: Vector2) -> void:
 	if chapter_done or free_play:
 		return
+	_clear_turn_advice()
 	cast_judged = true
 	if not reduced_motion:
 		light_flights.append({"from":where, "index":progress, "age":0.0})
@@ -726,11 +829,14 @@ func _judge_echo_turn(side: int, angle: float) -> void:
 			_award_goal(error, _echo_point(side, target))
 		else:
 			feedback = "鐘へ、もう少し強く力を渡そう。" if absf(angle) < absf(target) else "少し小さく引くと、小さな月が光へ届く。"
+			_record_turn_advice(side,angle,target)
 	else:
 		duet_checked[side] = true
 		duet_errors[side] = error
 		duet_offsets[side] = absf(angle) - absf(target)
 		duet_hits[side] = error <= 0.095
+		if not duet_hits[side]:
+			_record_turn_advice(side,angle,target)
 		if duet_hits[side]:
 			feedback = "一つ届いた！ もう一つの月を聴こう。"
 			_sound(4, 0.5)
@@ -749,11 +855,14 @@ func _judge_echo_turn(side: int, angle: float) -> void:
 				night_music.clear_replies()
 				feedback = "二つの月が、光で折り返す強さを探そう。"
 	feedback_timer = 5.0
+	if not turn_advice.is_empty():
+		feedback_timer = 0.0
 	_publish_state()
 
 func _begin_pull(pos: Vector2) -> void:
 	if chapter_done or show_help or paused:
 		return
+	turn_advice.clear()
 	dragging = true
 	keyboard_aim = false
 	swinging = false
@@ -790,6 +899,7 @@ func _release() -> void:
 		feedback_timer = 3.0
 		return
 	casts += 1
+	turn_advice.clear()
 	has_last_turn = false
 	has_last_echo_turn = [false,false]
 	cast_start_angle = theta
@@ -872,6 +982,7 @@ func _return_to_journey(restart: bool = false) -> void:
 
 
 func _retry(clear_cadence: bool = true) -> void:
+	turn_advice.clear()
 	night_music.clear_replies()
 	dragging = false
 	keyboard_aim = false
@@ -891,6 +1002,7 @@ func _retry(clear_cadence: bool = true) -> void:
 	_publish_state()
 
 func _new_chapter(index: int) -> void:
+	_clear_turn_advice()
 	free_play = index == CHAPTERS.size()
 	chapter = 2 if free_play else clampi(index, 0, CHAPTERS.size()-1)
 	if free_play:
@@ -1157,6 +1269,7 @@ func _draw() -> void:
 	_draw_sky_constellation()
 	_draw_stage()
 	_draw_echoes()
+	_draw_turn_advice()
 	_draw_light_flights()
 	_draw_header()
 	if started:
@@ -1346,9 +1459,10 @@ func _draw_stage() -> void:
 		_glow(target_pos, 20.0, _tone_color("gold"), pulse * 1.6)
 		draw_arc(pivot, length, PI * 0.5 - target - HIT_TOLERANCE, PI * 0.5 - target + HIT_TOLERANCE, 18, Color(0.91,0.80,0.50,0.28), 5.0, true)
 		draw_arc(target_pos, 26.0 if reduced_motion else 26.0 + sin(elapsed * 2.5) * 2.0, 0, TAU, 48, Color(0.94,0.84,0.61,0.8), 1.5, true)
-		_text("ここで折り返す",target_pos+Vector2(0,-40),16,_tone_color("gold"),true)
+		if str(_turn_advice_for(-1).get("word","")).is_empty():
+			_text("ここで折り返す",target_pos+Vector2(0,-40),16,_tone_color("gold"),true)
 		draw_colored_polygon(PackedVector2Array([target_pos+Vector2(0,-6),target_pos+Vector2(5,0),target_pos+Vector2(0,6),target_pos+Vector2(-5,0)]),_tone_color("gold"))
-		if has_last_turn and (not swinging or cast_judged or dragging):
+		if has_last_turn and (not swinging or cast_judged or dragging) and _turn_advice_for(-1).is_empty():
 			var previous := _point(last_turn)
 			draw_arc(previous,8.0,0.0,TAU,24,Color(WHITE,0.5),1.0,true)
 			_text("前の折り返し",previous+Vector2(0,24),13,MUTED,true)
@@ -1571,4 +1685,9 @@ func _publish_state() -> void:
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
+		var cues: Array = []
+		for cue in turn_advice:
+			var word_rect := _turn_advice_word_rect(cue)
+			cues.append({"side":cue["side"],"remaining":cue["remaining"],"word":cue["word"],"wordRect":[word_rect.position.x,word_rect.position.y,word_rect.size.x,word_rect.size.y]})
+		state["advice"] = {"misses":miss_streak,"cues":cues,"reducedMotion":reduced_motion}
 		JavaScriptBridge.eval("window.moonPendulumState = " + JSON.stringify(state) + ";")
