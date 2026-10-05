@@ -3,6 +3,7 @@ extends Node2D
 ## Pendulum motion uses a fixed physics timestep; all art is original vector drawing.
 
 const BUILD = preload("res://build_info.gd")
+const NIGHT_MUSIC = preload("res://scripts/night_music.gd")
 const FONT = preload("res://assets/fonts/MoonSerifUI.tres")
 const BELL_ANGLES = [-0.96, -0.66, -0.34, 0.0, 0.34, 0.66, 0.96]
 const NOTE_NAMES = ["D3", "A3", "D4", "E4", "F♯4", "B4", "D5"]
@@ -83,8 +84,8 @@ var audio_stop_after: Array[bool] = []
 var sounds: Array[AudioStreamWAV] = []
 var sound_banks: Array = []
 var echo_banks: Array = []
-var coda_banks: Array[AudioStreamWAV] = []
 var coda_started := false
+var night_music
 var palette_index := 0
 var palette_from := 0
 var palette_mix := 1.0
@@ -93,6 +94,7 @@ var garden_energy := 0.0
 var garden_lights: Array[float] = [0,0,0,0,0,0,0]
 var garden_flight_cooldowns: Array[float] = [0,0,0,0,0,0,0]
 var journey_resume: Dictionary = {}
+var listening_resume: Dictionary = {}
 var garden_scene: Dictionary = {}
 var last_turn := 0.0
 var has_last_turn := false
@@ -153,11 +155,10 @@ func _ready() -> void:
 		for name in ["left_low","right_low","left_high","right_high"]:
 			echoes_bank.append(load("res://assets/audio/%s_echo_%s.wav" % [prefix,name]))
 		echo_banks.append(echoes_bank)
-		coda_banks.append(load("res://assets/audio/%s_coda.wav" % prefix))
 	for stream in sound_banks[0]:
 		sounds.append(stream)
-	# A reserved coda voice prevents fast bell playing from stealing its ending.
-	for i in range(BELL_VOICES+1):
+	# Keep the physical bell pool independent of the continuing night score.
+	for i in range(BELL_VOICES):
 		var player := AudioStreamPlayer.new()
 		player.volume_db = -7.0
 		add_child(player)
@@ -169,6 +170,8 @@ func _ready() -> void:
 		audio_age.append(0.0)
 		audio_duration.append(0.0)
 		audio_stop_after.append(false)
+	night_music = NIGHT_MUSIC.new()
+	add_child(night_music)
 	_load_save()
 	_layout()
 	_reset_echoes()
@@ -255,13 +258,14 @@ func _point(angle: float, radius: float = -1.0) -> Vector2:
 
 func _process(delta: float) -> void:
 	_advance_audio_envelopes(delta)
+	night_music.advance(delta,started and not free_play and not muted and not paused and not show_help and transition_phase!=1,_transition_audio_gain())
+	state_clock += delta
+	if state_clock >= 0.5:
+		state_clock = 0.0
+		_publish_state()
 	if not paused and not show_help:
 		_advance_transition(delta)
 		elapsed += delta
-		state_clock += delta
-		if state_clock >= 0.5:
-			state_clock = 0.0
-			_publish_state()
 		palette_mix = minf(1.0, palette_mix + delta * 0.58)
 		pull_note_cooldown = maxf(0.0, pull_note_cooldown-delta)
 		if free_play:
@@ -481,6 +485,7 @@ func _cycle_palette() -> void:
 func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.0) -> void:
 	if muted or not started or paused or show_help:
 		return
+	night_music.duck()
 	var slot := voice % BELL_VOICES
 	voice += 1
 	_play_voice(stream,strength,base_db,slot)
@@ -505,7 +510,16 @@ func _play_coda() -> void:
 	if coda_started or free_play:
 		return
 	coda_started = true
-	_play_voice(coda_banks[palette_index],0.85,-14.0,BELL_VOICES)
+	night_music.unlock(_music_piece_count(),true,_goal_kind()=="duet")
+
+func _music_piece_count() -> int:
+	var count := 0
+	var score: Dictionary = CHAPTERS[chapter]
+	var kinds: Array = score.get("kinds",[])
+	for index in range(mini(progress,score["targets"].size())):
+		var kind := str(kinds[index] if index<kinds.size() else score.get("kind","main"))
+		count += 2 if kind=="duet" else 1
+	return count
 
 func _coda_light() -> float:
 	if reduced_motion:
@@ -557,6 +571,7 @@ func _advance_audio_envelopes(delta: float) -> void:
 				audio_stop_after[i] = false
 
 func _stop_audio(immediate: bool = false) -> void:
+	night_music.suspend(immediate)
 	for i in range(players.size()):
 		if immediate:
 			players[i].stop()
@@ -590,16 +605,18 @@ func _request_transition(action: String, index: int = 0) -> void:
 	transition_chapter = index
 	transition_resume = {}
 	if action in ["chapter","restart"]:
+		listening_resume = {}
 		transition_resume = {"chapter":index if action=="chapter" else 0,"progress":0,"casts":0,"perfects":0}
 	elif action=="garden" and not free_play:
 		transition_resume = _snapshot_journey()
 	# Commit navigation intent now, not after the visual curtain. An immediate
 	# refresh must not undo the explicit "start over" the player just chose.
 	_save()
+	night_music.leave(maxf(0.001,TRANSITION_OUT-transition_time)+TRANSITION_IN)
 	for i in range(players.size()):
 		if players[i].playing:
 			var duration := maxf(0.001,TRANSITION_OUT-transition_time)
-			_fade_voice(i,0.0,duration+TRANSITION_IN if i==BELL_VOICES else duration)
+			_fade_voice(i,0.0,duration)
 	_publish_state()
 
 func _advance_transition(delta: float) -> void:
@@ -685,6 +702,8 @@ func _award_goal(error: float, where: Vector2) -> void:
 		best_chapters[chapter] = maxi(int(best_chapters[chapter]), rating)
 		_save()
 		_play_coda()
+	else:
+		night_music.unlock(_music_piece_count(),false,previous_kind=="duet")
 	_save()
 	_layout()
 	_publish_state()
@@ -715,15 +734,19 @@ func _judge_echo_turn(side: int, angle: float) -> void:
 		if duet_hits[side]:
 			feedback = "一つ届いた！ もう一つの月を聴こう。"
 			_sound(4, 0.5)
+			night_music.reply(casts,side)
 		if duet_checked[0] and duet_checked[1]:
 			cast_judged = true
 			if duet_hits[0] and duet_hits[1]:
 				_award_goal(maxf(duet_errors[0], duet_errors[1]), _echo_point(side, target))
 			elif duet_offsets[0] < 0.0 and duet_offsets[1] < 0.0:
+				night_music.clear_replies()
 				feedback = "二つの月へ、もう少し強く力を渡そう。"
 			elif duet_offsets[0] > 0.0 and duet_offsets[1] > 0.0:
+				night_music.clear_replies()
 				feedback = "少しやさしく。二つの月を光へ。"
 			else:
+				night_music.clear_replies()
 				feedback = "二つの月が、光で折り返す強さを探そう。"
 	feedback_timer = 5.0
 	_publish_state()
@@ -822,19 +845,34 @@ func _return_to_journey(restart: bool = false) -> void:
 	if free_play:
 		garden_scene = {"lights":garden_lights.duplicate(),"energy":garden_energy}
 	var resume: Dictionary = journey_resume if not restart else {}
-	var index: int = int(resume.get("chapter",0 if restart else _resume_chapter()))
+	var listening: Dictionary = listening_resume.duplicate() if not restart else {}
+	if restart:
+		listening_resume = {}
+	var index: int = int(listening.get("chapter",resume.get("chapter",0 if restart else _resume_chapter())))
 	if index >= CHAPTERS.size():
 		index = 0
 	_new_chapter(index)
 	progress = clampi(int(resume.get("progress",0)),0,CHAPTERS[chapter]["targets"].size()-1)
 	casts = maxi(0,int(resume.get("casts",0)))
 	perfects = maxi(0,int(resume.get("perfects",0)))
+	if not listening.is_empty():
+		progress = CHAPTERS[chapter]["targets"].size()
+		casts = int(listening["casts"])
+		perfects = int(listening["perfects"])
+		chapter_done = true
+		coda_started = true
+		finish_time = 7.0
+	night_music.restore(_music_piece_count(),chapter_done)
+	_layout()
 	feedback = "金の輪で折り返すと、上の星が灯る。" if _goal_kind()=="main" else "鐘の力を、小さな月の光へ届けよう。"
+	if chapter_done:
+		feedback_timer = 0.0
 	_save()
 	_publish_state()
 
 
 func _retry(clear_cadence: bool = true) -> void:
+	night_music.clear_replies()
 	dragging = false
 	keyboard_aim = false
 	swinging = false
@@ -855,6 +893,10 @@ func _retry(clear_cadence: bool = true) -> void:
 func _new_chapter(index: int) -> void:
 	free_play = index == CHAPTERS.size()
 	chapter = 2 if free_play else clampi(index, 0, CHAPTERS.size()-1)
+	if free_play:
+		night_music.leave(TRANSITION_OUT+TRANSITION_IN)
+	else:
+		night_music.begin(chapter)
 	gravity_index = saved_gravity_index if free_play else 1
 	has_last_turn = false
 	has_last_echo_turn = [false,false]
@@ -1418,6 +1460,20 @@ func _load_save() -> void:
 			garden_scene = stored_garden
 		for i in range(CHAPTERS.size()):
 			best_chapters[i] = int(config.get_value("best", str(i), 0))
+		var listening = _validated_listening(config.get_value("music","listening",{}),best_chapters)
+		listening_resume = listening if listening is Dictionary else {}
+
+func _validated_listening(value: Variant, best: Array) -> Variant:
+	if not value is Dictionary:
+		return null
+	if value.is_empty():
+		return {}
+	if not _checkpoint_number(value.get("chapter"),0,CHAPTERS.size()-1,true) or not _checkpoint_number(value.get("casts"),0,1e7,true) or not _checkpoint_number(value.get("perfects"),0,1e7,true):
+		return null
+	var index := int(value["chapter"])
+	if int(best[index])<1:
+		return null
+	return {"chapter":index,"casts":int(value["casts"]),"perfects":int(value["perfects"])}
 
 func _checkpoint_number(value: Variant, minimum: float, maximum: float, integer: bool = false) -> bool:
 	if typeof(value) not in [TYPE_INT,TYPE_FLOAT]:
@@ -1444,6 +1500,9 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	for rating in best:
 		if not _checkpoint_number(rating,0,3,true):
 			return null
+	var listening = _validated_listening(data.get("listening",{}),best)
+	if listening==null:
+		return null
 	var clean_journey: Dictionary = {}
 	if not journey.is_empty():
 		if not _checkpoint_number(journey.get("chapter"),0,CHAPTERS.size()-1,true):
@@ -1471,6 +1530,7 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	config.set_value("settings","gravity",int(gravity))
 	config.set_value("journey","resume",clean_journey)
 	config.set_value("garden","scene",clean_garden)
+	config.set_value("music","listening",listening)
 	for i in range(best.size()):
 		config.set_value("best",str(i),int(best[i]))
 	return config
@@ -1491,6 +1551,9 @@ func _save() -> void:
 	elif not free_play:
 		journey_resume = _snapshot_journey()
 	config.set_value("journey","resume",journey_resume)
+	if started and not free_play and chapter_done and transition_phase==0:
+		listening_resume = {"chapter":chapter,"casts":casts,"perfects":perfects}
+	config.set_value("music","listening",listening_resume)
 	if free_play:
 		garden_scene = {"lights":garden_lights.duplicate(),"energy":garden_energy}
 	config.set_value("garden","scene",garden_scene)
@@ -1500,11 +1563,12 @@ func _save() -> void:
 	if OS.has_feature("web"):
 		# A versioned JSON checkpoint contains only the small game-state schema.
 		# Storage may be blocked by browser policy; keep filesystem saving intact.
-		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters}
+		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters,"listening":listening_resume}
 		JavaScriptBridge.eval("(function(){try{window.localStorage.setItem("+JSON.stringify(WEB_SAVE_KEY)+","+JSON.stringify(JSON.stringify(checkpoint))+");}catch(e){}})()")
 
 func _publish_state() -> void:
 	# A read-only public QA snapshot. It cannot alter gameplay or storage.
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
+		state["music"] = night_music.snapshot()
 		JavaScriptBridge.eval("window.moonPendulumState = " + JSON.stringify(state) + ";")

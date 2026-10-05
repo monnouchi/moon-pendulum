@@ -13,6 +13,9 @@ func check(condition: bool, message: String) -> void:
 func _initialize() -> void:
 	call_deferred("run")
 
+func playback_id(player: AudioStreamPlayer) -> int:
+	return player.get_stream_playback().get_instance_id()
+
 func run() -> void:
 	game = load("res://main.tscn").instantiate()
 	root.add_child(game)
@@ -31,8 +34,10 @@ func run() -> void:
 	var solutions := [[-0.58,0.85,1.0],[-0.98,-1.12],[0.98,-1.05],[-1.13,1.20],[-1.12,-1.20]]
 	for chapter_index in range(game.CHAPTERS.size()):
 		game._new_chapter(chapter_index)
+		var expected_pieces := 0
 		for angle in solutions[chapter_index]:
 			var before: int = game.progress
+			var paired: bool = game._goal_kind()=="duet"
 			game.dragging = true
 			game.theta = angle
 			game._release()
@@ -40,11 +45,14 @@ func run() -> void:
 				game._process(1.0/60.0)
 				game._physics_process(1.0/60.0)
 			check(game.progress==before+1,"Every optional journey light is reachable")
+			expected_pieces += 2 if paired else 1
+			check(game.night_music.pieces==expected_pieces,"Each earned sky piece unlocks a continuing high phrase, including paired stars")
 			for tick in range(240):
 				game._process(1.0/60.0)
 				game._physics_process(1.0/60.0)
 			check(game.progress==before+1,"One cast cannot consume a following light")
 		check(game.chapter_done,"Every optional night can complete")
+		check(game.night_music.completed and game.night_music.completion_starts==1,"Every night reaches its full score once")
 	# Each duet must accept the same gesture from either side. Keep the
 	# smaller gestures unsuccessful so the pair still requires both echoes.
 	for duet_case in [{"chapter":1,"angles":[0.98,1.12]},{"chapter":4,"angles":[1.12,1.20]}]:
@@ -286,6 +294,15 @@ func run() -> void:
 	broken["version"] = "1"
 	check(game._config_from_checkpoint(broken)==null,"Text schema versions fail quietly")
 	check(restored.get_value("settings","gravity")==1,"Old checkpoints default to standard gravity")
+	check(restored.get_value("music","listening",{})=={},"Old checkpoints remain valid without an optional listening record")
+	var listening_checkpoint: Dictionary = checkpoint.duplicate(true)
+	listening_checkpoint["listening"] = {"chapter":1,"casts":2,"perfects":2}
+	var listening_config: ConfigFile = game._config_from_checkpoint(listening_checkpoint)
+	check(listening_config!=null and listening_config.get_value("music","listening")["chapter"]==1,"Completed listening state extends version one without replacing legacy progress")
+	listening_checkpoint["listening"]["chapter"] = 4
+	check(game._config_from_checkpoint(listening_checkpoint)==null,"A listening record cannot invent a completed night")
+	listening_checkpoint["listening"] = {"chapter":1,"casts":NAN,"perfects":2}
+	check(game._config_from_checkpoint(listening_checkpoint)==null,"Non-finite listening records cannot replace a valid save")
 	broken = checkpoint.duplicate(true)
 	broken["gravity"] = 9
 	check(game._config_from_checkpoint(broken)==null,"Out-of-range gravity is rejected")
@@ -368,17 +385,23 @@ func run() -> void:
 	game._new_chapter(0)
 	check(game.next_rect.size==Vector2.ZERO and game.retry_rect.size.x>0,"An unfinished night does not show a premature next action")
 	game.progress = 2
+	game._process(1.0/60.0)
 	game._award_goal(0.01,game._goal_position())
-	check(game.coda_started and game.players[game.BELL_VOICES].stream==game.coda_banks[game.palette_index],"Stage completion plays its own palette-matched harmonic coda")
+	check(game.coda_started and game.night_music.completed and game.night_music.pieces==3 and game.night_music.bass_entries==1,"Completion immediately starts the continuing full score and bass once")
+	var bass_voice := -1
+	for i in range(game.night_music.players.size()):
+		if game.night_music.voices[i]["role"]=="bass" and game.night_music.voices[i]["generation"]==game.night_music.generation:
+			bass_voice = i
+	check(bass_voice>=0 and game.night_music.players[bass_voice].stream==game.night_music.bass_stream,"Completed score has its own sustained bass voice")
 	var completed_voice_count: int = game.voice
 	game._award_goal(0.01,game._goal_position())
 	check(game.voice==completed_voice_count and game.progress==3,"One completed night cannot celebrate or advance twice")
 	for i in range(30):
 		game._sound(i%7,0.7)
-	check(game.players[game.BELL_VOICES].stream==game.coda_banks[game.palette_index] and game.players.size()==13,"Bell playing cannot steal the reserved coda voice or grow the pool")
+	check(game.night_music.players[bass_voice].stream==game.night_music.bass_stream and game.players.size()==12 and game.night_music.players.size()==16,"Rapid bell playing cannot steal musical voices or grow either pool")
 	game._request_transition("garden")
 	game._process(0.16)
-	check(game.audio_gain[game.BELL_VOICES]>0.5,"Early next action retains a gently fading coda")
+	check(game.night_music.players[bass_voice].playing and game.night_music.voices[bass_voice]["gain"]>0.5,"Early next action retains a gently fading completed bass")
 	game._process(0.7)
 	game._toggle_mute()
 	game._process(0.05)
@@ -386,6 +409,78 @@ func run() -> void:
 	for player in game.players:
 		sounding = sounding or player.playing
 	check(not sounding,"Explicit mute stops every voice after a short anti-click ramp")
+	check(game.night_music.snapshot()["audibleVoices"]==0,"Explicit mute also silences the independent musical voices")
+	game.muted = false
+	game.paused = false
+	game.show_help = false
+	game.transition_phase = 0
+	game._new_chapter(1)
+	game._process(1.0/60.0)
+	game.night_music.reply(8,0)
+	game.night_music.reply(8,0)
+	check(game.night_music.replies==1 and game.night_music.pieces==0,"One duet moon replies once without awarding a permanent layer")
+	game.night_music.clear_replies()
+	game._process(0.13)
+	check(game.night_music.pieces==0,"An unsuccessful pair leaves no unearned continuing phrase")
+	game.night_music.reply(9,0)
+	game.night_music.reply(9,1)
+	game.night_music.unlock(2,false,true)
+	game.night_music.unlock(2,false,true)
+	check(game.night_music.replies==3 and game.night_music.pieces==2,"A new duet pair adds exactly two stable phrases without duplicate layers")
+	game.night_music.unlock(4,true,true)
+	game.night_music.unlock(4,true,true)
+	check(game.night_music.completion_starts==1 and game.night_music.bass_entries==1,"Repeated completion cannot restart the bass entrance")
+	var before_loop: int = game.night_music.phrase_notes
+	for tick in range(900):
+		game._process(1.0/60.0)
+	check(game.night_music.phrase_notes>before_loop+8 and game.night_music.completed,"Full star phrases continue beyond a short celebration")
+	var music_clock: float = game.night_music.time
+	var music_entries: int = game.night_music.bass_entries
+	var held_bass := -1
+	for slot in range(game.night_music.players.size()):
+		if game.night_music.voices[slot]["role"]=="bass" and game.night_music.voices[slot]["generation"]==game.night_music.generation:
+			held_bass = slot
+	var held_playback: int = playback_id(game.night_music.players[held_bass])
+	game.paused = true
+	game._stop_audio()
+	game._process(0.08)
+	check(game.night_music.time==music_clock and game.night_music.snapshot()["audibleVoices"]==0,"Pause freezes the musical score and silences it")
+	check(game.night_music.players[held_bass].stream_paused,"Paused bass retains its voice while inaudible")
+	game.paused = false
+	game._process(0.20)
+	check(game.night_music.bass_entries==music_entries and game.night_music.enabled,"Resume does not replay the completion entrance")
+	check(playback_id(game.night_music.players[held_bass])==held_playback and not game.night_music.players[held_bass].stream_paused,"Resume keeps the original bass playback instead of stacking a second one")
+	game.show_help = true
+	game._stop_audio()
+	game._process(0.08)
+	check(game.night_music.snapshot()["audibleVoices"]==0,"Help silences the sustained score")
+	game.show_help = false
+	game._process(0.20)
+	check(playback_id(game.night_music.players[held_bass])==held_playback,"Closing help preserves the original musical playback")
+	game._toggle_mute()
+	game._process(0.08)
+	check(game.night_music.snapshot()["audibleVoices"]==0,"Mute includes high phrases and sustained bass")
+	game._toggle_mute()
+	game._process(0.20)
+	check(game.night_music.bass_entries==music_entries,"Unmuting resumes music without a new reward entrance")
+	check(playback_id(game.night_music.players[held_bass])==held_playback,"Unmuting retains a single bass playback")
+	game._notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
+	game._process(0.08)
+	check(game.night_music.snapshot()["audibleVoices"]==0,"A hidden application cannot keep its music audible")
+	game.paused = false
+	game._process(0.10)
+	check(playback_id(game.night_music.players[held_bass])==held_playback,"Returning from a hidden application preserves the same bass")
+	game.journey_resume = {"chapter":2,"progress":0,"casts":0,"perfects":0}
+	game.listening_resume = {"chapter":1,"casts":2,"perfects":2}
+	game._return_to_journey()
+	game._process(0.10)
+	check(game.chapter==1 and game.chapter_done and game.progress==2 and game.night_music.pieces==4,"Listening restoration lights the completed pair constellation and full score")
+	check(game.night_music.bass_entries==0 and game.night_music.completion_starts==0,"Completed restoration fades in the sustained bass without repeating a reward")
+	game._request_transition("chapter",2)
+	check(game.listening_resume.is_empty(),"Choosing a new night clears the old listening position")
+	game._process(0.7)
+	game._process(0.02)
+	check(game.chapter==2 and game.night_music.night==2 and game.night_music.pieces==0 and not game.night_music.completed,"Each next night returns to its own lonely foundation")
 	game._new_chapter(0)
 	game._stop_audio(true)
 	game._new_chapter(game.CHAPTERS.size())
@@ -428,4 +523,6 @@ func run() -> void:
 	await process_frame
 	game.queue_free()
 	await process_frame
+	# Let AudioServer release the last stopped playback before engine shutdown.
+	await create_timer(0.12).timeout
 	quit(0)
