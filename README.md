@@ -62,6 +62,7 @@ http://localhost:8000 を開く。ファイルの直接起動には対応して�
 Compatibility / single-thread Web export、WebGL 2.0 + WebAssembly。
 COOP・COEP ヘッダー不要。Web Audio sample playback、残響と立体感は音源に焼き込んでいる。
 初回は公式 Godot エンジン約38MBを含む。
+待機画面の月と細い光は実際の読み込み進捗に連動する。動きを減らす設定に対応し、読み込みが止まった場合は再試行を表示する。
 
 ## テスト
 

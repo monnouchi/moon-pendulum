@@ -8,11 +8,76 @@
 <meta property="og:image" content="https://monnouchi.github.io/moon-pendulum/index.icon.png">
 <meta property="og:image:alt" content="月の振り子の三日月">
 <style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#071b28;color:#ecd7a4;font-family:"Yu Mincho","Hiragino Mincho ProN",serif;overflow:hidden}canvas{display:block;width:100%;height:100%;outline:0;touch-action:none}#loading{position:absolute;inset:0;display:grid;place-content:center;gap:22px;text-align:center;background:radial-gradient(ellipse at 50% 38%,#17333e,#071b28 70%);padding:26px}#loading h1{font-size:clamp(24px,5vw,38px);font-weight:400;letter-spacing:.15em;margin:0}#loading p{color:#9bb3b8;font-size:14px;line-height:1.8;margin:0;max-width:440px}progress{width:240px;max-width:80vw;height:5px;border:0;border-radius:10px;overflow:hidden;margin:auto;background:#28454e}progress::-webkit-progress-bar{background:#28454e}progress::-webkit-progress-value{background:#d8cf9e}#retry{display:none;border:1px solid #5c8484;background:#133540;color:#e8efea;border-radius:8px;padding:13px 18px;cursor:pointer}noscript{position:absolute;inset:0;padding:20vh 10vw;background:#071b28;color:#e8efea}
-</style>$GODOT_HEAD_INCLUDE</head><body><canvas id="canvas" tabindex="0" aria-label="月の振り子。マウスまたはタッチで月を左右に引いて放します。キーボードは左右矢印で角度を調整し、Spaceで放します。Rで引き直し、Mでミュート、Pで一時停止と再開、Hで説明。庭ではNで夜の色と音色を変えます。">WebGL 2.0 対応ブラウザで開いてください。</canvas><div id="loading" role="status" aria-live="polite"><h1>月の振り子</h1><p id="message">夜の支度をしています。<br>初回はゲームエンジンの読み込みに少し時間がかかります。</p><progress id="progress"></progress><button id="retry" onclick="location.reload()">もう一度読み込む</button></div><noscript>このゲームには JavaScript と WebGL 2.0 が必要です。</noscript><script src="$GODOT_URL"></script><script>
-const config=$GODOT_CONFIG;const game=new Engine(config);window.moonPendulumEngine=game;
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#071b28;color:#ecd7a4;font-family:"Yu Mincho","Hiragino Mincho ProN",serif;overflow:hidden}
+[hidden]{display:none!important}canvas{display:block;width:100%;height:100%;outline:0;touch-action:none}
+#loading{position:absolute;inset:0;display:grid;place-content:center;align-content:safe center;justify-items:center;gap:20px;text-align:center;background:radial-gradient(ellipse at 50% 38%,#17333e,#071b28 70%);padding:24px;overflow:auto}
+#loading h1{font-size:clamp(24px,5vw,38px);font-weight:400;letter-spacing:.15em;margin:0}
+#loading p{color:#9bb3b8;font-size:14px;line-height:1.8;margin:0;max-width:440px}
+.loading-moon{width:112px;height:112px;animation:moon-breath 3.6s ease-in-out infinite}
+.moon-light{opacity:var(--moon-light,.24);filter:drop-shadow(0 0 8px #d8cf9e66);transition:opacity .4s ease}
+@keyframes moon-breath{0%,100%{filter:brightness(.8)}50%{filter:brightness(1.15)}}
+progress{appearance:none;width:200px;max-width:72vw;height:3px;border:0;border-radius:10px;overflow:hidden;background:#28454e;color:#d8cf9e}
+progress::-webkit-progress-bar{background:#28454e}progress::-webkit-progress-value{background:#d8cf9e}progress::-moz-progress-bar{background:#d8cf9e}
+progress:not([value])::-webkit-progress-value{background:transparent}progress:indeterminate::-moz-progress-bar{background:transparent}
+#retry{border:1px solid #5c8484;background:#133540;color:#e8efea;border-radius:8px;padding:13px 18px;cursor:pointer;font:inherit}
+#retry:focus-visible{outline:2px solid #ecd7a4;outline-offset:4px}
+#details{max-width:min(440px,100%);color:#9bb3b8;font-size:13px;text-align:left}#details summary{cursor:pointer;text-align:center}#details pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto}
+#loading.failed .loading-moon{animation:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+@media(prefers-reduced-motion:reduce){.loading-moon{animation:none}.moon-light{transition:none}}
+noscript{position:absolute;inset:0;padding:20vh 10vw;background:#071b28;color:#e8efea}
+</style>$GODOT_HEAD_INCLUDE</head><body>
+<canvas id="canvas" tabindex="-1" aria-hidden="true" aria-label="月の振り子。マウスまたはタッチで月を左右に引いて放します。キーボードは左右矢印で角度を調整し、Spaceで放します。Rで引き直し、Mでミュート、Pで一時停止と再開、Hで説明。庭ではNで夜の色と音色を変えます。">WebGL 2.0 対応ブラウザで開いてください。</canvas>
+<div id="loading" role="region" aria-labelledby="loading-title" aria-busy="true">
+<h1 id="loading-title">月の振り子</h1>
+<svg class="loading-moon" viewBox="0 0 256 256" aria-hidden="true"><defs><mask id="moon-shade"><circle cx="128" cy="159" r="46" fill="white"/><circle cx="145" cy="147" r="39" fill="black"/></mask></defs><path d="M128 35v105" stroke="#79adac" stroke-width="3"/><circle class="moon-light" cx="128" cy="159" r="46" fill="#ecd7a4" mask="url(#moon-shade)"/><circle cx="68" cy="90" r="4" fill="#85d4c9"/><circle cx="187" cy="97" r="4" fill="#85d4c9"/></svg>
+<p id="message">夜の支度をしています。</p>
+<progress id="progress" aria-label="夜の支度" aria-describedby="message" aria-valuetext="夜の支度をしています。"></progress>
+<button id="retry" hidden>もう一度読み込む</button>
+<details id="details" hidden><summary>詳しい情報</summary><pre id="error-detail"></pre></details>
+</div>
+<p id="load-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true">夜の支度をしています。</p>
+<noscript>このゲームには JavaScript と WebGL 2.0 が必要です。</noscript>
+<script>
+const config=$GODOT_CONFIG;
 const loading=document.getElementById('loading'),message=document.getElementById('message'),bar=document.getElementById('progress');
-function fail(error){message.textContent='読み込みを完了できませんでした。WebGL 2.0 対応の Chrome / Firefox / Safari でお試しください。詳細: '+String(error);bar.hidden=true;document.getElementById('retry').style.display='block';console.error(error)}
-const missing=Engine.getMissingFeatures({threads:false});
-if(missing.length){fail(missing.join(', '))}else{game.startGame({canvas:document.getElementById('canvas'),onProgress:(loaded,total)=>{if(total>0){bar.max=total;bar.value=loaded}}}).then(()=>{loading.hidden=true;loading.style.display='none';document.getElementById('canvas').focus()}).catch(fail)}
+const canvas=document.getElementById('canvas'),retry=document.getElementById('retry'),status=document.getElementById('load-status');
+let failed=false,lastLoaded=0,lastTotal=0,lastActivity=performance.now(),announced=-1,retryOffered=false;
+retry.addEventListener('click',()=>location.reload());
+function fail(error,text='読み込みを完了できませんでした。接続を確かめて、もう一度お試しください。'){
+  failed=true;clearInterval(watchdog);loading.classList.add('failed');loading.setAttribute('aria-busy','false');
+  message.textContent=text;status.textContent=text;bar.hidden=true;retry.hidden=false;
+  document.getElementById('error-detail').textContent=String(error);document.getElementById('details').hidden=false;
+  retry.focus({preventScroll:true});console.error(error);
+}
+function progress(loaded,total){
+  if(failed)return;
+  if(loaded!==lastLoaded||total!==lastTotal){lastActivity=performance.now();lastLoaded=loaded;lastTotal=total;retryOffered=false;retry.hidden=true;}
+  if(Number.isFinite(total)&&total>0&&Number.isFinite(loaded)){
+    const ratio=Math.min(1,Math.max(0,loaded/total)),percent=Math.floor(ratio*100),bucket=Math.floor(percent/20);
+    bar.max=total;bar.value=Math.min(total,Math.max(0,loaded));bar.setAttribute('aria-valuetext',`読み込み ${percent}%。${ratio===1?'音と光を整えています。':'夜の支度をしています。'}`);
+    loading.style.setProperty('--moon-light',String(.24+.76*ratio));
+    if(!retryOffered)message.textContent=ratio===1?'音と光を整えています。':'夜の支度をしています。';
+    if(bucket!==announced){announced=bucket;status.textContent=ratio===1?'音と光を整えています。':`夜の支度、${percent}%。`;}
+  }else{bar.removeAttribute('value');bar.setAttribute('aria-valuetext','夜の支度をしています。');}
+}
+const watchdog=setInterval(()=>{
+  const quiet=performance.now()-lastActivity;
+  if(quiet>=120000){fail('読み込みが一定時間進みませんでした。');}
+  else if(quiet>=30000&&!retryOffered){retryOffered=true;message.textContent='夜の支度に時間がかかっています。';status.textContent='夜の支度に時間がかかっています。もう一度読み込むこともできます。';retry.hidden=false;}
+},1000);
+const engineScript=document.createElement('script');engineScript.src='$GODOT_URL';
+engineScript.onerror=()=>fail('読み込みに必要なファイルを取得できませんでした。');
+engineScript.onload=()=>{
+  lastActivity=performance.now();
+  try{
+    const missing=Engine.getMissingFeatures({threads:false});
+    if(missing.length){fail(missing.join(', '),'このブラウザでは表示できません。WebGL 2.0 対応の Chrome / Firefox / Safari でお試しください。');return;}
+    const game=new Engine(config);window.moonPendulumEngine=game;
+    game.startGame({canvas,onProgress:progress}).then(()=>{
+      clearInterval(watchdog);loading.hidden=true;loading.setAttribute('aria-busy','false');status.textContent='夜の支度ができました。';
+      canvas.removeAttribute('aria-hidden');canvas.tabIndex=0;canvas.focus();
+    }).catch(error=>fail(error));
+  }catch(error){fail(error);}
+};
+document.body.appendChild(engineScript);
 </script></body></html>
