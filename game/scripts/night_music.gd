@@ -11,6 +11,7 @@ const SCORES = [
 	{"bpm":62.0,"steps":24,"bass":38,"base":[[0,50,0.66],[12,57,0.54]],"layers":[[[0,74,0.65],[6,78,0.58],[12,81,0.60],[18,74,0.54]],[[3,76,0.60],[9,83,0.56],[15,78,0.56],[21,81,0.50]],[[2,86,0.56],[8,83,0.52],[14,81,0.54],[20,83,0.50]],[[5,78,0.56],[11,81,0.54],[17,86,0.56],[23,86,0.46]]]}
 ]
 var players: Array[AudioStreamPlayer] = []
+var applied_db: Array[float] = []
 var voices: Array[Dictionary] = []
 var instruments: Array[Array] = []
 var bass_stream: AudioStreamWAV
@@ -48,6 +49,7 @@ func _ready() -> void:
 		player.volume_db = -80.0
 		add_child(player)
 		players.append(player)
+		applied_db.append(-80.0)
 		voices.append({"generation":-1,"role":"","base":-30.0,"gain":0.0,"from":0.0,"to":0.0,"age":0.0,"duration":0.0,"after":"","tail":false})
 
 func _active(player: AudioStreamPlayer) -> bool:
@@ -229,11 +231,17 @@ func _tween(index: int, target: float, duration: float, after: String = "") -> v
 func _apply_gain(index: int) -> void:
 	var voice: Dictionary = voices[index]
 	var curtain := master_gain if int(voice["generation"])==generation and not voice["tail"] else 1.0
-	players[index].volume_db = float(voice["base"])+linear_to_db(maxf(0.000001,float(voice["gain"])*curtain*duck_gain))
+	var db := float(voice["base"])+linear_to_db(maxf(0.000001,float(voice["gain"])*curtain*duck_gain))
+	# Preserve each envelope without resending an unchanged audio gain.
+	if db!=applied_db[index]:
+		players[index].volume_db = db
+		applied_db[index] = db
 
 func _advance_voices(delta: float) -> void:
 	for index in range(players.size()):
 		var voice: Dictionary = voices[index]
+		if float(voice["duration"])<=0.0 and not players[index].has_stream_playback():
+			continue
 		if float(voice["duration"])>0.0:
 			voice["age"] += delta
 			var t := clampf(float(voice["age"])/float(voice["duration"]),0.0,1.0)

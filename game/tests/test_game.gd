@@ -511,22 +511,34 @@ func run() -> void:
 	for tick in range(900):
 		game._process(1.0/60.0)
 	check(game.night_music.phrase_notes>before_loop+8 and game.night_music.completed,"Full star phrases continue beyond a short celebration")
-	var music_clock: float = game.night_music.time
 	var music_entries: int = game.night_music.bass_entries
 	var held_bass := -1
 	for slot in range(game.night_music.players.size()):
 		if game.night_music.voices[slot]["role"]=="bass" and game.night_music.voices[slot]["generation"]==game.night_music.generation:
 			held_bass = slot
 	var held_playback: int = playback_id(game.night_music.players[held_bass])
+	var bass_player: AudioStreamPlayer = game.night_music.players[held_bass]
+	var level_before := bass_player.volume_db+AudioServer.get_bus_volume_db(AudioServer.get_bus_index(bass_player.bus))
+	game.night_music.duck()
+	game._process(1.0/60.0)
+	var level_ducked := bass_player.volume_db+AudioServer.get_bus_volume_db(AudioServer.get_bus_index(bass_player.bus))
+	check(level_ducked<level_before-1.5,"A physical bell gently lowers the continuing score's effective audio level")
+	game._process(0.80)
+	var level_recovered := bass_player.volume_db+AudioServer.get_bus_volume_db(AudioServer.get_bus_index(bass_player.bus))
+	check(absf(level_recovered-level_before)<0.01 and playback_id(bass_player)==held_playback,"The score regains its level without restarting its sustained bass")
+	var music_clock: float = game.night_music.time
 	game.paused = true
 	game._stop_audio()
 	game._process(0.08)
 	check(game.night_music.time==music_clock and game.night_music.snapshot()["audibleVoices"]==0,"Pause freezes the musical score and silences it")
 	check(game.night_music.players[held_bass].stream_paused,"Paused bass retains its voice while inaudible")
+	check(game.night_music.players[held_bass].volume_db<-80.0,"Paused bass reaches silence at its actual audio player")
 	game.paused = false
 	game._process(0.20)
 	check(game.night_music.bass_entries==music_entries and game.night_music.enabled,"Resume does not replay the completion entrance")
 	check(playback_id(game.night_music.players[held_bass])==held_playback and not game.night_music.players[held_bass].stream_paused,"Resume keeps the original bass playback instead of stacking a second one")
+	game._process(0.20)
+	check(game.night_music.players[held_bass].volume_db>-30.0,"Resumed bass restores an audible gain on the retained player")
 	game.show_help = true
 	game._stop_audio()
 	game._process(0.08)
