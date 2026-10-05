@@ -128,6 +128,7 @@ var reduced_motion := false
 var echoes: Array[Dictionary] = []
 var chain_rings := 0
 var harmonic_time := 0.0
+var title_frame_queued := false
 var state_clock := 0.0
 var transition_phase := 0
 var transition_time := 0.0
@@ -1424,6 +1425,7 @@ func _draw_header() -> void:
 	if not started:
 		var title_y := clampf(pivot.y-70.0,size.y*0.11,size.y*0.19)
 		_text("月の振り子",Vector2(size.x*0.5,title_y),42,_tone_color("gold"),true)
+		_text("Moon Pendulum",Vector2(size.x*0.5,title_y+30.0),17,Color(MUTED,0.82),true)
 		return
 	_text("月の振り子", Vector2(30.0, 49.0), 30, _tone_color("gold"))
 	if started:
@@ -1531,7 +1533,13 @@ func _draw_score() -> void:
 	if feedback_timer > 0.0:
 		_text(feedback, Vector2(size.x * 0.5, card_y + 76.0), 20, WHITE, true)
 
+func _notify_title_rendered() -> void:
+	JavaScriptBridge.eval("window.moonPendulumTitleReady=true;window.dispatchEvent(new Event('moon-pendulum-title-ready'));")
+
 func _draw_intro() -> void:
+	if not title_frame_queued and OS.has_feature("web"):
+		title_frame_queued = true
+		RenderingServer.frame_post_draw.connect(_notify_title_rendered,CONNECT_ONE_SHOT)
 	_button(start_rect,"奏でる",true)
 	_text(_journey_entry_label(true),Vector2(tour_rect.get_center().x,tour_rect.position.y+43.0),16,MUTED,true)
 	# A quiet speaker mark conveys sound without another paragraph of copy.

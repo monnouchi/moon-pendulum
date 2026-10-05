@@ -628,6 +628,10 @@ func run() -> void:
 	check(game._moon_hint().is_empty() and game._pitch_labels_visible(),"A familiar free garden stays quiet after settling")
 	game._new_chapter(0)
 	check(not game._moon_hint().is_empty() and not game._pitch_labels_visible(),"Journey gesture instructions also take priority over pitch names")
+	var english_glyphs := true
+	for ch in "Moon Pendulum":
+		english_glyphs = english_glyphs and game.FONT.has_char(ch.unicode_at(0))
+	check(english_glyphs,"The small English entrance title uses bundled glyphs")
 	var missing_glyphs: Array[String] = []
 	var source_text := FileAccess.get_file_as_string("res://scripts/main.gd")
 	for ch in source_text:

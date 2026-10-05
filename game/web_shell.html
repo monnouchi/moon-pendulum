@@ -10,7 +10,9 @@
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#071b28;color:#ecd7a4;font-family:"Yu Mincho","Hiragino Mincho ProN",serif;overflow:hidden}
 [hidden]{display:none!important}canvas{display:block;width:100%;height:100%;outline:0;touch-action:none}
-#loading{position:absolute;inset:0;display:grid;place-content:center;align-content:safe center;justify-items:center;gap:20px;text-align:center;background:radial-gradient(ellipse at 50% 38%,#17333e,#071b28 70%);padding:24px;overflow:auto}
+#loading{opacity:1;transition:opacity .42s ease-in-out;position:absolute;inset:0;display:grid;place-content:center;align-content:safe center;justify-items:center;gap:20px;text-align:center;background:radial-gradient(ellipse at 50% 38%,#17333e,#071b28 70%);padding:24px;overflow:auto}
+#loading.departing{opacity:0;pointer-events:none}
+#loading .loading-subtitle{font-size:12px;letter-spacing:.14em;line-height:1.4;margin:-14px 0 -3px;color:#9bb3b8}
 #loading h1{font-size:clamp(24px,5vw,38px);font-weight:400;letter-spacing:.15em;margin:0}
 #loading p{color:#9bb3b8;font-size:14px;line-height:1.8;margin:0;max-width:440px}
 .loading-moon{width:112px;height:112px;animation:moon-breath 3.6s ease-in-out infinite}
@@ -23,12 +25,13 @@ progress:not([value])::-webkit-progress-value{background:transparent}progress:in
 #retry:focus-visible{outline:2px solid #ecd7a4;outline-offset:4px}
 #details{max-width:min(440px,100%);color:#9bb3b8;font-size:13px;text-align:left}#details summary{cursor:pointer;text-align:center}#details pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto}
 #loading.failed .loading-moon{animation:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
-@media(prefers-reduced-motion:reduce){.loading-moon{animation:none}.moon-light{transition:none}}
+@media(prefers-reduced-motion:reduce){#loading{transition-duration:.08s}.loading-moon{animation:none}.moon-light{transition:none}}
 noscript{position:absolute;inset:0;padding:20vh 10vw;background:#071b28;color:#e8efea}
 </style>$GODOT_HEAD_INCLUDE</head><body>
 <canvas id="canvas" tabindex="-1" aria-hidden="true" aria-label="月の振り子。マウスまたはタッチで月を左右に引いて放します。キーボードは左右矢印で角度を調整し、Spaceで放します。Rで引き直し、Mでミュート、Pで一時停止と再開、Hで説明。庭ではNで夜の色と音色を変えます。">WebGL 2.0 対応ブラウザで開いてください。</canvas>
 <div id="loading" role="region" aria-labelledby="loading-title" aria-busy="true">
 <h1 id="loading-title">月の振り子</h1>
+<p class="loading-subtitle" lang="en">Moon Pendulum</p>
 <svg class="loading-moon" viewBox="0 0 256 256" aria-hidden="true"><defs><mask id="moon-shade"><circle cx="128" cy="159" r="46" fill="white"/><circle cx="145" cy="147" r="39" fill="black"/></mask></defs><path d="M128 35v105" stroke="#79adac" stroke-width="3"/><circle class="moon-light" cx="128" cy="159" r="46" fill="#ecd7a4" mask="url(#moon-shade)"/><circle cx="68" cy="90" r="4" fill="#85d4c9"/><circle cx="187" cy="97" r="4" fill="#85d4c9"/></svg>
 <p id="message">夜の支度をしています。</p>
 <progress id="progress" aria-label="夜の支度" aria-describedby="message" aria-valuetext="夜の支度をしています。"></progress>
@@ -41,10 +44,26 @@ noscript{position:absolute;inset:0;padding:20vh 10vw;background:#071b28;color:#e
 const config=$GODOT_CONFIG;
 const loading=document.getElementById('loading'),message=document.getElementById('message'),bar=document.getElementById('progress');
 const canvas=document.getElementById('canvas'),retry=document.getElementById('retry'),status=document.getElementById('load-status');
+let gameStarted=false,fadeQueued=false,fadeTimer;
 let failed=false,lastLoaded=0,lastTotal=0,lastActivity=performance.now(),announced=-1,retryOffered=false;
+function revealTitle(){
+  if(failed||fadeQueued||!gameStarted||!window.moonPendulumTitleReady)return;
+  fadeQueued=true;clearInterval(watchdog);
+  // A submitted Godot title frame and one browser paint precede the dissolve.
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    if(failed)return;
+    loading.setAttribute('aria-busy','false');status.textContent='夜の支度ができました。';
+    canvas.removeAttribute('aria-hidden');canvas.tabIndex=0;canvas.focus({preventScroll:true});
+    const finish=()=>{if(failed)return;clearTimeout(fadeTimer);loading.hidden=true;};
+    loading.addEventListener('transitionend',event=>{if(event.target===loading&&event.propertyName==='opacity')finish();});
+    loading.classList.add('departing');
+    fadeTimer=setTimeout(finish,matchMedia('(prefers-reduced-motion: reduce)').matches?140:500);
+  }));
+}
+window.addEventListener('moon-pendulum-title-ready',revealTitle,{once:true});
 retry.addEventListener('click',()=>location.reload());
 function fail(error,text='読み込みを完了できませんでした。接続を確かめて、もう一度お試しください。'){
-  failed=true;clearInterval(watchdog);loading.classList.add('failed');loading.setAttribute('aria-busy','false');
+  failed=true;clearInterval(watchdog);clearTimeout(fadeTimer);loading.hidden=false;loading.classList.remove('departing');loading.classList.add('failed');loading.setAttribute('aria-busy','false');
   message.textContent=text;status.textContent=text;bar.hidden=true;retry.hidden=false;
   document.getElementById('error-detail').textContent=String(error);document.getElementById('details').hidden=false;
   retry.focus({preventScroll:true});console.error(error);
@@ -74,8 +93,7 @@ engineScript.onload=()=>{
     if(missing.length){fail(missing.join(', '),'このブラウザでは表示できません。WebGL 2.0 対応の Chrome / Firefox / Safari でお試しください。');return;}
     const game=new Engine(config);window.moonPendulumEngine=game;
     game.startGame({canvas,onProgress:progress}).then(()=>{
-      clearInterval(watchdog);loading.hidden=true;loading.setAttribute('aria-busy','false');status.textContent='夜の支度ができました。';
-      canvas.removeAttribute('aria-hidden');canvas.tabIndex=0;canvas.focus();
+      gameStarted=true;revealTitle();
     }).catch(error=>fail(error));
   }catch(error){fail(error);}
 };
