@@ -558,6 +558,49 @@ func run() -> void:
 	game._process(0.7)
 	game._process(0.02)
 	check(game.chapter==2 and game.night_music.night==2 and game.night_music.pieces==0 and not game.night_music.completed,"Each next night returns to its own lonely foundation")
+	var cycle_best: Array = game.best_chapters.duplicate()
+	var cycle_palette: int = game.palette_index
+	var cycle_gravity: int = game.saved_gravity_index
+	game.journey_resume = {"chapter":0,"progress":0,"casts":0,"perfects":0}
+	game.listening_resume = {"chapter":4,"casts":2,"perfects":2}
+	game._return_to_journey()
+	check(game.chapter==4 and game.chapter_done and game.progress==2 and game.night_music.pieces==4,"Direct restoration retains the completed final night for listening")
+	check(game._journey_entry_label(true)=="音のつづき","The direct completed-score entrance describes listening instead of a playable stage")
+	game._request_transition("garden")
+	check(game.listening_resume.is_empty() and game.transition_resume["chapter"]==0,"Explicit final exit clears listening before a refresh can interrupt the curtain")
+	game._process(0.7)
+	game._process(0.02)
+	check(game.free_play and game.journey_resume["chapter"]==0 and game.journey_resume["progress"]==0,"Finishing the cycle leaves a fresh first-night journey in the garden")
+	check(game._journey_entry_label()=="もう一度","The completed cycle offers a replay rather than a misleading continuation")
+	game._return_to_journey()
+	check(game.chapter==0 and not game.chapter_done and game.progress==0 and game.casts==0 and game.night_music.pieces==0,"Garden replay starts an unfinished first night without old score layers")
+	cast_until_judged(-0.58)
+	check(game.progress==1,"The moon is operable and can earn a real first-night star after replay")
+	check(game.best_chapters==cycle_best and game.palette_index==cycle_palette and game.saved_gravity_index==cycle_gravity,"Replay preserves all best results and saved settings")
+	var legacy_final: Dictionary = checkpoint.duplicate(true)
+	legacy_final["best"] = [1,1,1,1,1]
+	legacy_final["journey"] = {"chapter":0,"progress":0,"casts":0,"perfects":0}
+	legacy_final["listening"] = {"chapter":4,"casts":2,"perfects":2}
+	var legacy_final_config: ConfigFile = game._config_from_checkpoint(legacy_final)
+	check(legacy_final_config!=null,"The former version-one final-listening save remains valid")
+	game.journey_resume = legacy_final_config.get_value("journey","resume")
+	game.listening_resume = legacy_final_config.get_value("music","listening")
+	game._new_chapter(0)
+	game._start_art()
+	check(game.free_play and game.listening_resume.is_empty() and game._journey_entry_label()=="もう一度","Choosing the garden also retires an ambiguous legacy final-listening save")
+	game._return_to_journey()
+	check(game.chapter==0 and not game.chapter_done,"A legacy garden save cannot trap replay on the completed final screen")
+	legacy_final.erase("listening")
+	legacy_final_config = game._config_from_checkpoint(legacy_final)
+	game.journey_resume = legacy_final_config.get_value("journey","resume")
+	game.listening_resume = legacy_final_config.get_value("music","listening")
+	check(game._journey_entry_label(true)=="もう一度","Completed saves from before music still offer a first-night replay")
+	game.listening_resume = {"chapter":1,"casts":2,"perfects":2}
+	game._return_to_journey()
+	game._enter_garden()
+	game._return_to_journey()
+	check(game.chapter==1 and game.chapter_done and game.night_music.pieces==4,"The final-cycle fix preserves listening detours for earlier completed nights")
+	game.listening_resume = {}
 	game._new_chapter(0)
 	game._stop_audio(true)
 	game._new_chapter(game.CHAPTERS.size())

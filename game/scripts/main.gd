@@ -709,6 +709,7 @@ func _request_transition(action: String, index: int = 0) -> void:
 		transition_resume = {"chapter":index if action=="chapter" else 0,"progress":0,"casts":0,"perfects":0}
 	elif action=="garden" and not free_play:
 		transition_resume = _snapshot_journey()
+		_finish_cycle_for_garden()
 	# Commit navigation intent now, not after the visual curtain. An immediate
 	# refresh must not undo the explicit "start over" the player just chose.
 	_save()
@@ -925,6 +926,23 @@ func _resume_chapter() -> int:
 			return i
 	return CHAPTERS.size()
 
+func _finish_cycle_for_garden() -> void:
+	# A completed V may be restored for listening until the player chooses
+	# the garden. That explicit exit ends the cycle, including legacy saves.
+	if (not free_play and chapter_done and chapter==CHAPTERS.size()-1) or int(listening_resume.get("chapter",-1))==CHAPTERS.size()-1:
+		listening_resume = {}
+		journey_resume = {"chapter":0,"progress":0,"casts":0,"perfects":0}
+
+func _journey_entry_label(intro: bool = false) -> String:
+	if intro and not listening_resume.is_empty():
+		return "音のつづき"
+	var fresh_cycle := journey_resume.is_empty() or (int(journey_resume.get("chapter",0))==0 and int(journey_resume.get("progress",0))==0 and int(journey_resume.get("casts",0))==0)
+	if listening_resume.is_empty() and _resume_chapter()==CHAPTERS.size() and fresh_cycle:
+		return "もう一度"
+	if not journey_resume.is_empty() or _resume_chapter()>0:
+		return "星のつづき" if intro else "つづきへ"
+	return "星を灯す遊び"
+
 func _snapshot_journey() -> Dictionary:
 	if chapter_done:
 		return {"chapter":(chapter+1)%CHAPTERS.size(),"progress":0,"casts":0,"perfects":0}
@@ -943,6 +961,7 @@ func _start() -> void:
 func _enter_garden(capture: bool = true) -> void:
 	if capture and not free_play:
 		journey_resume = _snapshot_journey()
+	_finish_cycle_for_garden()
 	_new_chapter(CHAPTERS.size())
 	if garden_scene.has("lights"):
 		garden_lights.assign(garden_scene["lights"])
@@ -954,6 +973,7 @@ func _enter_garden(capture: bool = true) -> void:
 func _return_to_journey(restart: bool = false) -> void:
 	if free_play:
 		garden_scene = {"lights":garden_lights.duplicate(),"energy":garden_energy}
+		_finish_cycle_for_garden()
 	var resume: Dictionary = journey_resume if not restart else {}
 	var listening: Dictionary = listening_resume.duplicate() if not restart else {}
 	if restart:
@@ -1275,7 +1295,7 @@ func _draw() -> void:
 	if started:
 		_draw_score()
 		if retry_rect.size.x>0.0:
-			_button(retry_rect, ("つづきへ" if not journey_resume.is_empty() or _resume_chapter()>0 else "星を灯す遊び") if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"))
+			_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"))
 		if next_rect.size.x>0.0:
 			_button(next_rect, "夜を変える" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
 	else:
@@ -1513,7 +1533,7 @@ func _draw_score() -> void:
 
 func _draw_intro() -> void:
 	_button(start_rect,"奏でる",true)
-	_text("星のつづき" if not journey_resume.is_empty() or _resume_chapter()>0 else "星を灯す遊び",Vector2(tour_rect.get_center().x,tour_rect.position.y+43.0),16,MUTED,true)
+	_text(_journey_entry_label(true),Vector2(tour_rect.get_center().x,tour_rect.position.y+43.0),16,MUTED,true)
 	# A quiet speaker mark conveys sound without another paragraph of copy.
 	var at := Vector2(start_rect.end.x+21.0,start_rect.get_center().y)
 	var c := Color(MUTED,0.68)
@@ -1685,6 +1705,7 @@ func _publish_state() -> void:
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
+		state["journeyEntry"] = _journey_entry_label(not started)
 		var cues: Array = []
 		for cue in turn_advice:
 			var word_rect := _turn_advice_word_rect(cue)
