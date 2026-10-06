@@ -86,7 +86,12 @@ func leave(duration: float) -> void:
 		if not voice["tail"] and int(voice["generation"])==generation:
 			voice["gain"] = float(voice["gain"])*master_gain
 		voice["tail"] = true
-		_tween(index,0.0,duration,"stop")
+		var held: Dictionary = voice.get("held_tail",{})
+		if not held.is_empty():
+			# A restart may replace navigation while the curtain is paused.
+			voice["held_tail"] = {"from":_envelope_gain(held),"to":0.0,"age":0.0,"duration":maxf(0.001,duration),"after":"stop"}
+		else:
+			_tween(index,0.0,duration,"stop")
 
 func restore(count: int, finished: bool) -> void:
 	pieces = clampi(count,0,SCORES[night]["layers"].size())
@@ -103,6 +108,13 @@ func suspend(immediate: bool = false) -> void:
 	for index in range(players.size()):
 		if not _active(players[index]):
 			continue
+		var voice: Dictionary = voices[index]
+		if voice["tail"] and voice["after"]=="stop" and float(voice["duration"])>0.0 and voice.get("held_tail",{}).is_empty():
+			voice["held_tail"] = {"from":voice["from"],"to":voice["to"],"age":voice["age"],"duration":voice["duration"],"after":"stop"}
+		# Mute from the audible level, including a possible return ramp.
+		voice["gain"] = float(voice["gain"])*float(voice.get("return_gain",1.0))
+		voice["return_gain"] = 1.0
+		voice["return_duration"] = 0.0
 		if immediate:
 			players[index].stream_paused = true
 			voices[index]["gain"] = 0.0
@@ -148,12 +160,14 @@ func duck() -> void:
 	duck_gain = minf(duck_gain,0.72)
 	duck_hold = 0.14
 
-func advance(delta: float, allowed: bool, transition_gain: float) -> void:
+func advance(delta: float, allowed: bool, transition_gain: float, interrupted: bool = false, freeze_tails: bool = false) -> void:
 	master_gain = transition_gain
 	duck_hold = maxf(0.0,duck_hold-delta)
 	if duck_hold<=0.0:
 		duck_gain = move_toward(duck_gain,1.0,delta*0.65)
-	_advance_voices(delta)
+	if not interrupted:
+		_resume_tails()
+	_advance_voices(delta,freeze_tails)
 	if not allowed:
 		if enabled and not leaving:
 			suspend()
@@ -236,24 +250,61 @@ func _tween(index: int, target: float, duration: float, after: String = "") -> v
 	voice["duration"] = maxf(0.001,duration)
 	voice["after"] = after
 
+func _envelope_gain(envelope: Dictionary) -> float:
+	var t := clampf(float(envelope["age"])/float(envelope["duration"]),0.0,1.0)
+	return lerpf(float(envelope["from"]),float(envelope["to"]),t*t*(3.0-2.0*t))
+
+func _resume_tails() -> void:
+	for index in range(players.size()):
+		var voice: Dictionary = voices[index]
+		var held: Dictionary = voice.get("held_tail",{})
+		if held.is_empty() or not _active(players[index]):
+			continue
+		for key in ["from","to","age","duration","after"]:
+			voice[key] = held[key]
+		voice["gain"] = _envelope_gain(held)
+		voice["held_tail"] = {}
+		voice["return_gain"] = 0.0
+		voice["return_age"] = 0.0
+		voice["return_duration"] = minf(0.18,float(held["duration"])-float(held["age"]))
+		var pitch := players[index].pitch_scale
+		players[index].stream_paused = false
+		# Web Sample replaces the paused source; restore its held pitch too.
+		players[index].pitch_scale = pitch
+		_apply_gain(index)
+
 func _apply_gain(index: int) -> void:
 	var voice: Dictionary = voices[index]
 	var curtain := master_gain if int(voice["generation"])==generation and not voice["tail"] else 1.0
-	var db := float(voice["base"])+linear_to_db(maxf(0.000001,float(voice["gain"])*curtain*duck_gain))
+	var db := float(voice["base"])+linear_to_db(maxf(0.000001,float(voice["gain"])*float(voice.get("return_gain",1.0))*curtain*duck_gain))
 	# Preserve each envelope without resending an unchanged audio gain.
 	if db!=applied_db[index]:
 		players[index].volume_db = db
 		applied_db[index] = db
 
-func _advance_voices(delta: float) -> void:
+func _advance_voices(delta: float, freeze_tails: bool = false) -> void:
 	for index in range(players.size()):
 		var voice: Dictionary = voices[index]
+		var held: Dictionary = voice.get("held_tail",{})
+		if not held.is_empty() and not freeze_tails:
+			held["age"] = float(held["age"])+delta
+			if float(held["age"])>=float(held["duration"]):
+				voice["held_tail"] = {}
+				voice["gain"] = 0.0
+				voice["duration"] = 0.0
+				players[index].stream_paused = false
+				players[index].stop()
+		if float(voice.get("return_duration",0.0))>0.0:
+			voice["return_age"] = float(voice["return_age"])+delta
+			var t := clampf(float(voice["return_age"])/float(voice["return_duration"]),0.0,1.0)
+			voice["return_gain"] = t*t*(3.0-2.0*t)
+			if t>=1.0:voice["return_duration"] = 0.0
 		if float(voice["duration"])<=0.0 and not players[index].has_stream_playback():
 			continue
 		if float(voice["duration"])>0.0:
 			voice["age"] += delta
 			var t := clampf(float(voice["age"])/float(voice["duration"]),0.0,1.0)
-			voice["gain"] = lerpf(float(voice["from"]),float(voice["to"]),t*t*(3.0-2.0*t))
+			voice["gain"] = _envelope_gain(voice)
 			if t>=1.0:
 				voice["duration"] = 0.0
 				if voice["after"]=="pause":players[index].stream_paused = true
@@ -267,6 +318,6 @@ func snapshot() -> Dictionary:
 	for index in range(players.size()):
 		var voice: Dictionary = voices[index]
 		var curtain := master_gain if int(voice["generation"])==generation and not voice["tail"] else 1.0
-		if _active(players[index]) and not players[index].stream_paused and float(voice["gain"])*curtain*duck_gain>0.00001:
+		if _active(players[index]) and not players[index].stream_paused and float(voice["gain"])*float(voice.get("return_gain",1.0))*curtain*duck_gain>0.00001:
 			audible += 1
 	return {"night":night,"pieces":pieces,"complete":completed,"time":time,"enabled":enabled and not leaving,"audibleVoices":audible,"completionStarts":completion_starts,"bassEntries":bass_entries,"replies":replies,"phraseNotes":phrase_notes}

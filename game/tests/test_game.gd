@@ -16,6 +16,35 @@ func _initialize() -> void:
 func playback_id(player: AudioStreamPlayer) -> int:
 	return player.get_stream_playback().get_instance_id()
 
+func advance_for(seconds: float) -> void:
+	var remaining := seconds
+	while remaining>0.000001:
+		var delta := minf(remaining,1.0/120.0)
+		game._process(delta)
+		remaining -= delta
+
+func completed_transition() -> int:
+	game._stop_audio(true)
+	for index in range(game.night_music.players.size()):
+		game.night_music.players[index].stream_paused = false
+		game.night_music.players[index].stop()
+		game.night_music.voices[index]["held_tail"] = {}
+		game.night_music.voices[index]["duration"] = 0.0
+	game.paused = false
+	game.show_help = false
+	game.muted = false
+	game.transition_phase = 0
+	game._new_chapter(0)
+	game.chapter_done = true
+	game.night_music.restore(3,true)
+	advance_for(0.7)
+	var bass := -1
+	for index in range(game.night_music.players.size()):
+		if game.night_music.players[index].playing and game.night_music.voices[index]["role"]=="bass":
+			bass = index
+	game._request_transition("chapter",1)
+	return bass
+
 func cast_until_judged(angle: float) -> void:
 	game._retry()
 	game.dragging = true
@@ -408,11 +437,13 @@ func run() -> void:
 	check(game.transition_action=="chapter" and game.chapter==1,"Navigation locks one destination before fade-out")
 	game._process(0.16)
 	check(game.audio_gain[held_voice]>0.0 and game.audio_gain[held_voice]<1.0,"Navigation fades existing audio instead of cutting immediately")
-	game._process(0.17)
-	check(game.chapter==2 and game.transition_phase==2,"Scene changes once at the dark midpoint")
+	game._process(game.TRANSITION_OUT+0.01-0.16)
+	check(game.chapter==1 and game.transition_phase==1 and game._transition_audio_gain()==0.0,"The old night reaches darkness before the quiet interval")
 	check(game.players[held_voice].playing and game.audio_gain[held_voice]<0.001,"Faded tails keep their natural sample lifetime")
-	game._process(0.34)
-	check(game.transition_phase==0,"Fade-in releases navigation promptly")
+	game._process(game.TRANSITION_QUIET)
+	check(game.chapter==2 and game.transition_phase==2,"Scene changes once after the dark quiet interval")
+	game._process(game.TRANSITION_IN)
+	check(game.transition_phase==0,"Fade-in releases navigation after the new night appears")
 	game._new_chapter(0)
 	game._request_transition("chapter",1)
 	var transition_pause_key := InputEventKey.new()
@@ -422,7 +453,7 @@ func run() -> void:
 	game._process(0.5)
 	check(game.paused and game.chapter==0 and game.transition_phase==1,"Pause remains available during a transition")
 	game._input(transition_pause_key)
-	game._process(0.7)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
 	check(game.chapter==1 and game.transition_phase==0,"Resume completes exactly one pending destination")
 	game._request_transition("chapter",2)
 	var transition_help_key := InputEventKey.new()
@@ -439,16 +470,75 @@ func run() -> void:
 	transition_help_click.position = game.help_restart_rect.get_center()
 	game._input(transition_help_click)
 	check(not game.show_help and game.transition_action=="restart" and game.transition_resume["chapter"]==0,"Explicit restart can replace a pending transition")
-	game._process(0.7)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
 	check(game.chapter==0 and game.transition_phase==0,"The replacement destination completes exactly once")
 	game._request_transition("chapter",2)
-	game._process(0.40)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.08)
 	game._input(transition_help_key)
 	transition_help_click.position = game.help_restart_rect.get_center()
 	game._input(transition_help_click)
 	check(game.transition_phase==1 and game.transition_time>0.0,"Restart during fade-in reverses at the existing opacity")
-	game._process(0.7)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
 	check(game.chapter==0 and game.transition_phase==0,"Late restart returns cleanly to the first night")
+	var tail_bass := completed_transition()
+	check(tail_bass>=0,"A completed transition begins with a real sustained bass")
+	var old_generation: int = game.night_music.generation
+	var old_phrase_notes: int = game.night_music.phrase_notes
+	advance_for(0.66)
+	check(game.chapter==0 and game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.6,"The old bass still rings beyond the former complete transition")
+	advance_for(game.TRANSITION_OUT-0.66-0.05)
+	check(game.night_music.voices[tail_bass]["gain"]<0.003 and game.night_music.phrase_notes==old_phrase_notes,"The completed score decays close to silence without adding old notes")
+	advance_for(0.06)
+	check(not game.night_music.players[tail_bass].playing and game.night_music.snapshot()["audibleVoices"]==0,"The score stops only after its envelope reaches zero")
+	advance_for(game.TRANSITION_QUIET-0.03)
+	check(game.chapter==0 and game.transition_phase==1 and game.night_music.generation==old_generation and game.night_music.snapshot()["audibleVoices"]==0,"A real silent interval precedes the next night")
+	advance_for(0.04)
+	check(game.chapter==1 and game.transition_phase==2 and game.night_music.generation==old_generation+1,"The next sparse score begins once after silence")
+	advance_for(game.TRANSITION_IN)
+	check(game.transition_phase==0 and game.night_music.pieces==0,"The new night opens without completed score layers")
+	for interruption in [transition_pause_key,transition_help_key]:
+		tail_bass = completed_transition()
+		old_generation = game.night_music.generation
+		advance_for(0.45)
+		var held_time: float = game.transition_time
+		game._input(interruption)
+		advance_for(0.09)
+		check(game.night_music.snapshot()["audibleVoices"]==0,"Pause and help rapidly silence a long transition tail")
+		advance_for(0.5)
+		check(is_equal_approx(game.transition_time,held_time) and game.chapter==0,"Pause and help freeze the curtain and its pending night")
+		game._input(interruption)
+		advance_for(0.2)
+		check(game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.5 and game.night_music.voices[tail_bass].get("held_tail",{}).is_empty(),"Resume returns to the remaining afterglow during fade-out")
+		advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
+		check(game.chapter==1 and game.transition_phase==0 and game.night_music.generation==old_generation+1,"An interrupted transition completes its destination only once")
+	tail_bass = completed_transition()
+	advance_for(0.45)
+	game._toggle_mute()
+	advance_for(0.09)
+	check(game.night_music.snapshot()["audibleVoices"]==0,"Mute retains its short ramp during a slow night transition")
+	advance_for(0.2)
+	game._toggle_mute()
+	advance_for(0.2)
+	check(game.transition_time>0.9 and game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.4,"Unmuting resumes only the remaining tail while navigation keeps moving")
+	game._toggle_mute()
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
+	check(game.chapter==1 and game.transition_phase==0 and game.night_music.snapshot()["audibleVoices"]==0,"A muted transition finishes silently")
+	game._toggle_mute()
+	advance_for(0.2)
+	var old_tail_returned := false
+	for index in range(game.night_music.players.size()):
+		old_tail_returned = old_tail_returned or (game.night_music.players[index].playing and game.night_music.voices[index]["tail"])
+	check(not old_tail_returned and game.night_music.enabled,"Unmuting after navigation cannot revive the former completed score")
+	tail_bass = completed_transition()
+	advance_for(0.45)
+	game._notification(MainLoop.NOTIFICATION_APPLICATION_FOCUS_OUT)
+	check(game.paused and game.night_music.snapshot()["audibleVoices"]==0,"Focus loss immediately silences a long afterglow")
+	advance_for(0.5)
+	check(game.chapter==0 and game.transition_time<0.46,"Hidden application does not consume the remaining afterglow")
+	game._input(transition_pause_key)
+	advance_for(0.2)
+	check(game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.5,"Returning from focus loss restores the remaining tail safely")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
 	game._new_chapter(4)
 	game.chapter_done = true
 	game._layout()
@@ -479,7 +569,7 @@ func run() -> void:
 	game._request_transition("garden")
 	game._process(0.16)
 	check(game.night_music.players[bass_voice].playing and game.night_music.voices[bass_voice]["gain"]>0.5,"Early next action retains a gently fading completed bass")
-	game._process(0.7)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
 	game._toggle_mute()
 	game._process(0.05)
 	var sounding := false
@@ -567,7 +657,7 @@ func run() -> void:
 	check(game.night_music.bass_entries==0 and game.night_music.completion_starts==0,"Completed restoration fades in the sustained bass without repeating a reward")
 	game._request_transition("chapter",2)
 	check(game.listening_resume.is_empty(),"Choosing a new night clears the old listening position")
-	game._process(0.7)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
 	game._process(0.02)
 	check(game.chapter==2 and game.night_music.night==2 and game.night_music.pieces==0 and not game.night_music.completed,"Each next night returns to its own lonely foundation")
 	var cycle_best: Array = game.best_chapters.duplicate()
@@ -580,7 +670,7 @@ func run() -> void:
 	check(game._journey_entry_label(true)=="音のつづき","The direct completed-score entrance describes listening instead of a playable stage")
 	game._request_transition("garden")
 	check(game.listening_resume.is_empty() and game.transition_resume["chapter"]==0,"Explicit final exit clears listening before a refresh can interrupt the curtain")
-	game._process(0.7)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
 	game._process(0.02)
 	check(game.free_play and game.journey_resume["chapter"]==0 and game.journey_resume["progress"]==0,"Finishing the cycle leaves a fresh first-night journey in the garden")
 	check(game._journey_entry_label()=="もう一度","The completed cycle offers a replay rather than a misleading continuation")

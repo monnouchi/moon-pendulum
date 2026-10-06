@@ -138,8 +138,9 @@ var transition_time := 0.0
 var transition_action := ""
 var transition_chapter := 0
 var transition_resume: Dictionary = {}
-const TRANSITION_OUT = 0.32
-const TRANSITION_IN = 0.34
+const TRANSITION_OUT = 1.8
+const TRANSITION_QUIET = 0.4
+const TRANSITION_IN = 0.8
 var cadence_notes: Array[Dictionary] = []
 var free_play := false
 var gravity_index := 1
@@ -276,7 +277,7 @@ func _point(angle: float, radius: float = -1.0) -> Vector2:
 
 func _process(delta: float) -> void:
 	_advance_audio_envelopes(delta)
-	night_music.advance(delta,started and not free_play and not muted and not paused and not show_help and transition_phase!=1,_transition_audio_gain())
+	night_music.advance(delta,started and not free_play and not muted and not paused and not show_help and transition_phase!=1,_transition_audio_gain(),muted or paused or show_help,paused or show_help)
 	state_clock += delta
 	if state_clock >= 0.5:
 		state_clock = 0.0
@@ -736,7 +737,8 @@ func _request_transition(action: String, index: int = 0) -> void:
 	# Commit navigation intent now, not after the visual curtain. An immediate
 	# refresh must not undo the explicit "start over" the player just chose.
 	_save()
-	night_music.leave(maxf(0.001,TRANSITION_OUT-transition_time)+TRANSITION_IN)
+	# Let the old score reach silence before the next night begins.
+	night_music.leave(maxf(0.001,TRANSITION_OUT-transition_time))
 	for i in range(players.size()):
 		if players[i].playing:
 			var duration := maxf(0.001,TRANSITION_OUT-transition_time)
@@ -747,9 +749,9 @@ func _advance_transition(delta: float) -> void:
 	if transition_phase==0:
 		return
 	transition_time += delta
-	if transition_phase==1 and transition_time>=TRANSITION_OUT:
+	if transition_phase==1 and transition_time>=TRANSITION_OUT+TRANSITION_QUIET:
 		transition_phase = 2
-		transition_time -= TRANSITION_OUT
+		transition_time -= TRANSITION_OUT+TRANSITION_QUIET
 		match transition_action:
 			"chapter": _new_chapter(transition_chapter)
 			"garden": _enter_garden()
@@ -1049,7 +1051,7 @@ func _new_chapter(index: int) -> void:
 	free_play = index == CHAPTERS.size()
 	chapter = 2 if free_play else clampi(index, 0, CHAPTERS.size()-1)
 	if free_play:
-		night_music.leave(TRANSITION_OUT+TRANSITION_IN)
+		night_music.leave(TRANSITION_OUT)
 	else:
 		night_music.begin(chapter)
 	gravity_index = saved_gravity_index if free_play else 1
