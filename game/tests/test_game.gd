@@ -62,9 +62,37 @@ func run() -> void:
 	check(not game.started, "Audio starts behind a user gesture")
 	game.testing = true
 	game.best_chapters = [0,0,0,0,0]
+	game.best_casts = [0,0,0,0,0]
 	game.journey_resume = {}
+	game.listening_resume = {}
 	game.garden_scene = {}
 	game.muted = true
+	var title_click := InputEventMouseButton.new()
+	title_click.button_index = MOUSE_BUTTON_LEFT
+	title_click.pressed = true
+	title_click.position = Vector2(game.size.x*0.5,game.size.y-120.0)
+	game._input(title_click)
+	check(not game.started,"The title has no separate button or night link below its moon")
+	game.elapsed = game.INTRO_PERIOD*0.25
+	var entrance_angle: float = game._intro_angle()
+	var entrance_mass: Vector2 = game._point(entrance_angle)
+	var entrance_center: Vector2 = game._intro_moon_center()
+	title_click.position = entrance_center+Vector2(game.INTRO_HIT_RADIUS-1.0,0)
+	game._input(title_click)
+	check(game.started and game.free_play,"Touching the visible title moon enters the garden")
+	check(game._point(game.theta).distance_to(entrance_mass)<0.001 and game._moon_radius()==42.0,"The entrance keeps the displayed moon position and settles its size gently")
+	game._process(game.INTRO_SETTLE)
+	check(game._moon_radius()==25.0 and game.casts==0 and not game.swinging,"The introduction does not change garden physics or spend a stroke")
+	game.started = false
+	game.reduced_motion = true
+	game.elapsed += 1.0
+	check(game._intro_angle()==0.0,"Reduced motion keeps the title moon still")
+	var title_key := InputEventKey.new()
+	title_key.keycode = KEY_ENTER
+	title_key.pressed = true
+	game._input(title_key)
+	check(game.started and game.free_play and game.intro_settle==0.0,"Enter uses the same garden entrance without reduced-motion animation")
+	game.reduced_motion = false
 	game._start()
 	check(game.started, "Start gesture enters play")
 	game._begin_pull(game.pivot + Vector2(-500.0, 10.0))
@@ -309,7 +337,7 @@ func run() -> void:
 	check(game.progress == preserved_progress and game.paused, "Hidden controls do not activate through pause")
 	game._input(pause_key)
 	check(not game.paused, "Pause can resume with its documented key")
-	game._start_art()
+	game._start()
 	check(game.free_play and not game.chapter_done,"Main entrance opens expressive garden without mandatory tasks")
 	game.dragging = true
 	game.theta = -1.0
@@ -743,7 +771,7 @@ func run() -> void:
 	game.listening_resume = {"chapter":4,"casts":2,"perfects":2}
 	game._return_to_journey()
 	check(game.chapter==4 and game.chapter_done and game.progress==2 and game.night_music.pieces==4,"Direct restoration retains the completed final night for listening")
-	check(game._journey_entry_label(true)=="音のつづき","The direct completed-score entrance describes listening instead of a playable stage")
+	check(game._journey_entry_label()=="音のつづき","The garden's completed-score entrance describes listening instead of a playable stage")
 	game._request_transition("garden")
 	check(game.listening_resume.is_empty() and game.transition_resume["chapter"]==0,"Explicit final exit clears listening before a refresh can interrupt the curtain")
 	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
@@ -764,21 +792,41 @@ func run() -> void:
 	game.journey_resume = legacy_final_config.get_value("journey","resume")
 	game.listening_resume = legacy_final_config.get_value("music","listening")
 	game._new_chapter(0)
-	game._start_art()
-	check(game.free_play and game.listening_resume.is_empty() and game._journey_entry_label()=="もう一度","Choosing the garden also retires an ambiguous legacy final-listening save")
+	game.started = false
+	game._start()
+	check(game.free_play and game.listening_resume["chapter"]==4 and game._journey_entry_label()=="音のつづき","Title entry preserves a legacy final-listening save inside the garden")
 	game._return_to_journey()
-	check(game.chapter==0 and not game.chapter_done,"A legacy garden save cannot trap replay on the completed final screen")
+	check(game.chapter==4 and game.chapter_done and game.night_music.pieces==4 and game.night_music.completion_starts==0,"The garden restores the legacy final score without a repeated reward")
+	game._enter_garden()
+	check(game.listening_resume.is_empty() and game._journey_entry_label()=="もう一度","Explicitly leaving the final score still retires its listening position")
+	game._return_to_journey()
+	check(game.chapter==0 and not game.chapter_done,"An explicit final exit permits a fresh first-night replay")
 	legacy_final.erase("listening")
 	legacy_final_config = game._config_from_checkpoint(legacy_final)
 	game.journey_resume = legacy_final_config.get_value("journey","resume")
 	game.listening_resume = legacy_final_config.get_value("music","listening")
-	check(game._journey_entry_label(true)=="もう一度","Completed saves from before music still offer a first-night replay")
+	check(game._journey_entry_label()=="もう一度","Completed saves from before music still offer a first-night replay")
 	game.listening_resume = {"chapter":1,"casts":2,"perfects":2}
 	game._return_to_journey()
 	game._enter_garden()
 	game._return_to_journey()
 	check(game.chapter==1 and game.chapter_done and game.night_music.pieces==4,"The final-cycle fix preserves listening detours for earlier completed nights")
 	game.listening_resume = {}
+	var title_partial := {"chapter":0,"progress":1,"casts":3,"perfects":1,"lit":[false,true,false]}
+	game.journey_resume = title_partial.duplicate(true)
+	game.started = false
+	title_key.keycode = KEY_M
+	var before_title_mute: bool = game.muted
+	game._input(title_key)
+	check(not game.started and game.muted!=before_title_mute and game.journey_resume==title_partial,"Title sound settings do not enter a mode or replace a partial journey")
+	title_click.position = game.mute_rect.get_center()
+	game._input(title_click)
+	check(not game.started and game.muted==before_title_mute and game.journey_resume==title_partial,"The speaker control is separate from the moon entrance")
+	title_key.keycode = KEY_SPACE
+	game._input(title_key)
+	check(game.started and game.free_play and game.journey_resume==title_partial,"Space enters the garden while keeping unordered lights and spent strokes")
+	game._return_to_journey()
+	check(game.chapter==0 and game.lit_goals==[false,true,false] and game.casts==3 and game.night_music.active_layers==[false,true,false],"The garden restores the same partial constellation and music after title entry")
 	game._new_chapter(0)
 	game._stop_audio(true)
 	game._new_chapter(game.CHAPTERS.size())
@@ -880,9 +928,10 @@ func run() -> void:
 		check(visible.encloses(game.mute_rect) and visible.encloses(game.pause_rect), "Header controls fit resized viewport")
 		var scale: float = float(resolution.x) / game.size.x
 		check(game.retry_rect.size.y * scale >= 44.0, "Portrait retry touch target is at least 44 physical pixels")
-		check(visible.encloses(game.start_rect) and visible.encloses(game.tour_rect),"Minimal introduction controls fit the viewport")
-		check(game.start_rect.position.y>=game.pivot.y+game.length+57.0,"Hero moon has clear space above the start action")
-		check(game.start_rect.size.y*scale>=44.0,"Portrait start action remains a full touch target")
+		var title_area := Rect2(game._intro_moon_center()-Vector2.ONE*game.INTRO_HIT_RADIUS,Vector2.ONE*game.INTRO_HIT_RADIUS*2.0)
+		check(visible.encloses(title_area),"The moving title moon and its full hit area fit the viewport")
+		check(not title_area.intersects(game.mute_rect),"Sound settings cannot overlap the moon entrance")
+		check(game.INTRO_HIT_RADIUS*2.0*scale>=44.0,"The title moon remains a full touch target on narrow screens")
 		for direction in [-1.0,1.0]:
 			game._new_chapter(1)
 			cast_until_judged(direction*0.5)

@@ -30,6 +30,10 @@ const MOON_COM = Vector2(-0.33865537,0.26339862)
 const MOON_BAIL = Vector2(-0.54,-1.03)
 const MOON_SHOULDER = Vector2(-0.55,-0.60)
 const BELL_VOICES = 12
+const INTRO_SWAY = 0.055
+const INTRO_PERIOD = 6.0
+const INTRO_HIT_RADIUS = 60.0
+const INTRO_SETTLE = 0.35
 
 var size := Vector2.ZERO
 var pivot := Vector2.ZERO
@@ -41,6 +45,7 @@ var keyboard_aim := false
 var web_document: JavaScriptObject
 var visibility_callback: JavaScriptObject
 var started := false
+var intro_settle := 0.0
 var muted := false
 var paused := false
 var swinging := false
@@ -110,8 +115,6 @@ const TURN_ADVICE_SECONDS = 1.8
 var last_pull_note := -1
 var pull_note_cooldown := 0.0
 var voice := 0
-var start_rect := Rect2()
-var tour_rect := Rect2()
 var help_restart_rect := Rect2()
 var help_repeat_rect := Rect2()
 var retry_rect := Rect2()
@@ -263,9 +266,6 @@ func _layout() -> void:
 	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
 	help_rect = Rect2(size.x - 202.0, 20.0, 66.0, 66.0)
 	pause_rect = Rect2(size.x - 276.0, 20.0, 66.0, 66.0)
-	var start_y := clampf(pivot.y+length+91.0,size.y*0.55,size.y-180.0)
-	start_rect = Rect2(size.x * 0.5 - 72.0, start_y, 144.0, 66.0)
-	tour_rect = Rect2(size.x*0.5-100.0,start_rect.end.y+20.0,200.0,66.0)
 	help_repeat_rect = Rect2(size.x*0.5-126.0,size.y*0.26+420.0,252.0,56.0)
 	help_restart_rect = Rect2(size.x*0.5-126.0,size.y*0.26+490.0,252.0,66.0)
 
@@ -310,6 +310,21 @@ func _point(angle: float, radius: float = -1.0) -> Vector2:
 	var r := length if radius < 0.0 else radius
 	return pivot + Vector2(sin(angle), cos(angle)) * r
 
+func _intro_angle() -> float:
+	return 0.0 if reduced_motion else sin(elapsed*TAU/INTRO_PERIOD)*INTRO_SWAY
+
+func _moon_radius() -> float:
+	if not started:return 42.0
+	var t := clampf(intro_settle/INTRO_SETTLE,0.0,1.0)
+	return lerpf(25.0,42.0,t*t*(3.0-2.0*t))
+
+func _intro_moon_center() -> Vector2:
+	var angle := _intro_angle()
+	return _moon_origin(_point(angle),angle,42.0)
+
+func _intro_moon_hit(pos: Vector2) -> bool:
+	return pos.distance_to(_intro_moon_center())<=INTRO_HIT_RADIUS
+
 func _process(delta: float) -> void:
 	_advance_audio_envelopes(delta)
 	night_music.advance(delta,started and not free_play and not muted and not paused and not show_help and transition_phase!=1,_transition_audio_gain(),muted or paused or show_help,paused or show_help)
@@ -320,6 +335,7 @@ func _process(delta: float) -> void:
 	if not paused and not show_help:
 		_advance_transition(delta)
 		elapsed += delta
+		intro_settle = maxf(0.0,intro_settle-delta)
 		palette_mix = minf(1.0, palette_mix + delta * 0.58)
 		pull_note_cooldown = maxf(0.0, pull_note_cooldown-delta)
 		if free_play:
@@ -995,14 +1011,14 @@ func _finish_cycle_for_garden() -> void:
 		listening_resume = {}
 		journey_resume = {"chapter":0,"progress":0,"casts":0,"perfects":0}
 
-func _journey_entry_label(intro: bool = false) -> String:
-	if intro and not listening_resume.is_empty():
+func _journey_entry_label() -> String:
+	if not listening_resume.is_empty():
 		return "音のつづき"
 	var fresh_cycle := journey_resume.is_empty() or (int(journey_resume.get("chapter",0))==0 and int(journey_resume.get("progress",0))==0 and int(journey_resume.get("casts",0))==0)
 	if listening_resume.is_empty() and _resume_chapter()==CHAPTERS.size() and fresh_cycle:
 		return "もう一度"
 	if not journey_resume.is_empty() or _resume_chapter()>0:
-		return "星のつづき" if intro else "つづきへ"
+		return "つづきへ"
 	return "星を灯す遊び"
 
 func _snapshot_journey() -> Dictionary:
@@ -1010,20 +1026,19 @@ func _snapshot_journey() -> Dictionary:
 		return {"chapter":(chapter+1)%CHAPTERS.size(),"progress":0,"casts":0,"perfects":0}
 	return {"chapter":chapter,"progress":progress,"casts":casts,"perfects":perfects,"lit":lit_goals.duplicate()}
 
-func _start_art() -> void:
+func _start() -> void:
+	var entrance_angle := _intro_angle()
 	started = true
 	_enter_garden(false)
+	theta = entrance_angle
+	intro_settle = 0.0 if reduced_motion else INTRO_SETTLE
 	_sound(2,0.5)
-
-func _start() -> void:
-	started = true
-	_return_to_journey()
-	_sound(2,0.5)
+	_publish_state()
 
 func _enter_garden(capture: bool = true) -> void:
 	if capture and not free_play:
 		journey_resume = _snapshot_journey()
-	_finish_cycle_for_garden()
+		_finish_cycle_for_garden()
 	_new_chapter(CHAPTERS.size())
 	if garden_scene.has("lights"):
 		garden_lights.assign(garden_scene["lights"])
@@ -1035,7 +1050,6 @@ func _enter_garden(capture: bool = true) -> void:
 func _return_to_journey(restart: bool = false) -> void:
 	if free_play:
 		garden_scene = {"lights":garden_lights.duplicate(),"energy":garden_energy}
-		_finish_cycle_for_garden()
 	var resume: Dictionary = journey_resume if not restart else {}
 	var listening: Dictionary = listening_resume.duplicate() if not restart else {}
 	if restart:
@@ -1099,6 +1113,7 @@ func _new_chapter(index: int) -> void:
 	last_pull_note = -1
 	progress = 0
 	_set_goal_mask()
+	intro_settle = 0.0
 	casts = 0
 	perfects = 0
 	chapter_done = false
@@ -1136,9 +1151,9 @@ func _input(event: InputEvent) -> void:
 		if event.pressed:
 			var pos: Vector2 = event.position
 			if not started:
-				if start_rect.has_point(pos):
-					_start_art()
-				elif tour_rect.has_point(pos):
+				if mute_rect.has_point(pos):
+					_toggle_mute()
+				elif _intro_moon_hit(pos):
 					_start()
 				return
 			if show_help:
@@ -1213,7 +1228,9 @@ func _input(event: InputEvent) -> void:
 			return
 		if not started:
 			if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
-				_start_art()
+				_start()
+			elif event.keycode == KEY_M:
+				_toggle_mute()
 			return
 		match event.keycode:
 			KEY_M:
@@ -1565,9 +1582,9 @@ func _draw_stage() -> void:
 		var c := _tone_color("teal")
 		c.a = maxf(0.0, 1.0 - float(r["age"]) / 2.2) * 0.26
 		draw_arc(r["pos"], 8.0 + float(r["age"]) * 45.0, 0, TAU, 32, c, 1.0, true)
-	var moon := _point(theta)
-	var moon_radius := 25.0 if started else 42.0
-	_draw_moon(pivot,moon,theta,moon_radius,_tone_color("gold"),1.4,Color("86aaa2"))
+	var moon_angle := theta if started else _intro_angle()
+	var moon := _point(moon_angle)
+	_draw_moon(pivot,moon,moon_angle,_moon_radius(),_tone_color("gold"),1.4,Color("86aaa2"))
 	draw_circle(pivot, 6.0, _tone_color("gold"))
 	draw_circle(pivot, 2.0, INK)
 	if dragging:
@@ -1599,11 +1616,9 @@ func _draw_score() -> void:
 		if not lit_goals[i] and not chapter_done:
 			draw_arc(pos, 9.0, 0, TAU, 24, _tone_color("gold"), 1.0, true)
 	var goal_text := "三振りで、この星座を" if int(CHAPTERS[chapter]["strokes"])==3 else "二振りで、この星座を"
-	var record := "%d振り" % casts
-	if int(best_casts[chapter])>0:record += "　自己ベスト %d" % int(best_casts[chapter])
-	_text(record if chapter_done else goal_text,Vector2(49,card_y+66),17,MUTED)
+	var tally := "%d振り" % casts
+	_text(tally if chapter_done else goal_text,Vector2(49,card_y+66),17,MUTED)
 	if not chapter_done:
-		var tally := "%d振り" % casts
 		var width := FONT.get_string_size(tally,HORIZONTAL_ALIGNMENT_LEFT,-1,17).x
 		_text(tally,Vector2(size.x-49-width,card_y+66),17,MUTED)
 	if feedback_timer>0.0:
@@ -1616,10 +1631,8 @@ func _draw_intro() -> void:
 	if not title_frame_queued and OS.has_feature("web"):
 		title_frame_queued = true
 		RenderingServer.frame_post_draw.connect(_notify_title_rendered,CONNECT_ONE_SHOT)
-	_button(start_rect,"奏でる",true)
-	_text(_journey_entry_label(true),Vector2(tour_rect.get_center().x,tour_rect.position.y+43.0),16,MUTED,true)
 	# A quiet speaker mark conveys sound without another paragraph of copy.
-	var at := Vector2(start_rect.end.x+21.0,start_rect.get_center().y)
+	var at := mute_rect.get_center()
 	var c := Color(MUTED,0.68)
 	draw_colored_polygon(PackedVector2Array([at+Vector2(-5,-4),at+Vector2(0,-4),at+Vector2(6,-9),at+Vector2(6,9),at+Vector2(0,4),at+Vector2(-5,4)]),c)
 	if muted:
@@ -1773,7 +1786,7 @@ func _save() -> void:
 	config.set_value("settings","gravity",saved_gravity_index)
 	if transition_phase==1 and not transition_resume.is_empty():
 		journey_resume = transition_resume.duplicate()
-	elif not free_play:
+	elif started and not free_play:
 		journey_resume = _snapshot_journey()
 	config.set_value("journey","resume",journey_resume)
 	if started and not free_play and chapter_done and transition_phase==0:
@@ -1803,7 +1816,12 @@ func _publish_state() -> void:
 		state["mainTurns"] = main_turns
 		state["castJudged"] = cast_judged
 		state["echoTurns"] = [echoes[0]["turns"],echoes[1]["turns"]]
-		state["journeyEntry"] = _journey_entry_label(not started)
+		state["journeyEntry"] = _journey_entry_label()
+		var moon_angle := theta if started else _intro_angle()
+		var mass := _point(moon_angle)
+		var origin := _moon_origin(mass,moon_angle,_moon_radius())
+		state["canvasSize"] = [size.x,size.y]
+		state["moon"] = {"angle":moon_angle,"mass":[mass.x,mass.y],"origin":[origin.x,origin.y],"radius":_moon_radius(),"hitRadius":INTRO_HIT_RADIUS if not started else 0.0}
 		var cues: Array = []
 		for cue in turn_advice:
 			var word_rect := _turn_advice_word_rect(cue)
