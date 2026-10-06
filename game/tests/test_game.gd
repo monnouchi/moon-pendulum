@@ -149,7 +149,7 @@ func run() -> void:
 	var record_before_repeat: Array = game.best_casts.duplicate()
 	game._request_transition("repeat",0)
 	check(game.transition_resume["casts"]==0 and game.transition_resume["progress"]==0,"Whole-night retry commits its fresh intent before the curtain")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	check(game.casts==0 and game.progress==0 and game.night_music.pieces==0 and game.best_casts==record_before_repeat,"Whole-night retry clears the constellation while retaining its record")
 	game.dragging = true
 	game.theta = 0.07
@@ -495,6 +495,15 @@ func run() -> void:
 	unordered_checkpoint["journey"] = {"chapter":0,"progress":1,"casts":3,"perfects":1,"lit":[false,true,false]}
 	unordered_checkpoint["bestCasts"] = [2,0,0,0,0]
 	var unordered_config: ConfigFile = game._config_from_checkpoint(unordered_checkpoint)
+	for seen in [true,false]:
+		var seen_checkpoint: Dictionary = unordered_checkpoint.duplicate(true)
+		seen_checkpoint["journey"]["introSeen"] = seen
+		var seen_config: ConfigFile = game._config_from_checkpoint(seen_checkpoint)
+		check(seen_config!=null and seen_config.get_value("journey","resume")["introSeen"]==seen,"An optional seen-sky flag round trips without changing old save version")
+	for invalid_seen in [1,"true",[],{}]:
+		var malformed_seen: Dictionary = unordered_checkpoint.duplicate(true)
+		malformed_seen["journey"]["introSeen"] = invalid_seen
+		check(game._config_from_checkpoint(malformed_seen)==null,"Malformed introduction flags cannot replace a good save")
 	check(unordered_config!=null and unordered_config.get_value("journey","resume")["lit"]==[false,true,false] and unordered_config.get_value("casts_best","0")==2,"Version one extends safely with unordered lights and stroke records")
 	for invalid_lit in [[true,false], [false,1,false], [true,true,false]]:
 		var malformed: Dictionary = unordered_checkpoint.duplicate(true)
@@ -545,7 +554,7 @@ func run() -> void:
 	check(game.players[held_voice].playing and game.audio_gain[held_voice]<0.001,"Faded tails keep their natural sample lifetime")
 	game._process(game.TRANSITION_QUIET)
 	check(game.chapter==2 and game.transition_phase==2,"Scene changes once after the dark quiet interval")
-	game._process(game.TRANSITION_IN)
+	advance_for(game.NIGHT_VIEW+game.NIGHT_PAN)
 	check(game.transition_phase==0,"Fade-in releases navigation after the new night appears")
 	game._new_chapter(0)
 	game._request_transition("chapter",1)
@@ -556,7 +565,7 @@ func run() -> void:
 	game._process(0.5)
 	check(game.paused and game.chapter==0 and game.transition_phase==1,"Pause remains available during a transition")
 	game._input(transition_pause_key)
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	check(game.chapter==1 and game.transition_phase==0,"Resume completes exactly one pending destination")
 	game._request_transition("chapter",2)
 	var transition_help_key := InputEventKey.new()
@@ -573,7 +582,7 @@ func run() -> void:
 	transition_help_click.position = game.help_restart_rect.get_center()
 	game._input(transition_help_click)
 	check(not game.show_help and game.transition_action=="restart" and game.transition_resume["chapter"]==0,"Explicit restart can replace a pending transition")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	check(game.chapter==0 and game.transition_phase==0,"The replacement destination completes exactly once")
 	game._request_transition("chapter",2)
 	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.08)
@@ -581,7 +590,7 @@ func run() -> void:
 	transition_help_click.position = game.help_restart_rect.get_center()
 	game._input(transition_help_click)
 	check(game.transition_phase==1 and game.transition_time>0.0,"Restart during fade-in reverses at the existing opacity")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	check(game.chapter==0 and game.transition_phase==0,"Late restart returns cleanly to the first night")
 	var tail_bass := completed_transition()
 	check(tail_bass>=0,"A completed transition begins with a real sustained bass")
@@ -597,7 +606,7 @@ func run() -> void:
 	check(game.chapter==0 and game.transition_phase==1 and game.night_music.generation==old_generation and game.night_music.snapshot()["audibleVoices"]==0,"A real silent interval precedes the next night")
 	advance_for(0.04)
 	check(game.chapter==1 and game.transition_phase==2 and game.night_music.generation==old_generation+1,"The next sparse score begins once after silence")
-	advance_for(game.TRANSITION_IN)
+	advance_for(game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	check(game.transition_phase==0 and game.night_music.pieces==0,"The new night opens without completed score layers")
 	for interruption in [transition_pause_key,transition_help_key]:
 		tail_bass = completed_transition()
@@ -612,7 +621,7 @@ func run() -> void:
 		game._input(interruption)
 		advance_for(0.2)
 		check(game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.5 and game.night_music.voices[tail_bass].get("held_tail",{}).is_empty(),"Resume returns to the remaining afterglow during fade-out")
-		advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
+		advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN)
 		check(game.chapter==1 and game.transition_phase==0 and game.night_music.generation==old_generation+1,"An interrupted transition completes its destination only once")
 	tail_bass = completed_transition()
 	advance_for(0.45)
@@ -624,7 +633,7 @@ func run() -> void:
 	advance_for(0.2)
 	check(game.transition_time>0.9 and game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.4,"Unmuting resumes only the remaining tail while navigation keeps moving")
 	game._toggle_mute()
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN)
 	check(game.chapter==1 and game.transition_phase==0 and game.night_music.snapshot()["audibleVoices"]==0,"A muted transition finishes silently")
 	game._toggle_mute()
 	advance_for(0.2)
@@ -641,7 +650,7 @@ func run() -> void:
 	game._input(transition_pause_key)
 	advance_for(0.2)
 	check(game.night_music.players[tail_bass].playing and game.night_music.voices[tail_bass]["gain"]>0.5,"Returning from focus loss restores the remaining tail safely")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN)
 	game._new_chapter(4)
 	game.chapter_done = true
 	game._layout()
@@ -673,7 +682,7 @@ func run() -> void:
 	game._request_transition("garden")
 	game._process(0.16)
 	check(game.night_music.players[bass_voice].playing and game.night_music.voices[bass_voice]["gain"]>0.5,"Early next action retains a gently fading completed bass")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN)
 	game._toggle_mute()
 	game._process(0.05)
 	var sounding := false
@@ -761,7 +770,7 @@ func run() -> void:
 	check(game.night_music.bass_entries==0 and game.night_music.completion_starts==0,"Completed restoration fades in the sustained bass without repeating a reward")
 	game._request_transition("chapter",2)
 	check(game.listening_resume.is_empty(),"Choosing a new night clears the old listening position")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	game._process(0.02)
 	check(game.chapter==2 and game.night_music.night==2 and game.night_music.pieces==0 and not game.night_music.completed,"Each next night returns to its own lonely foundation")
 	var cycle_best: Array = game.best_chapters.duplicate()
@@ -774,7 +783,7 @@ func run() -> void:
 	check(game._journey_entry_label()=="音のつづき","The garden's completed-score entrance describes listening instead of a playable stage")
 	game._request_transition("garden")
 	check(game.listening_resume.is_empty() and game.transition_resume["chapter"]==0,"Explicit final exit clears listening before a refresh can interrupt the curtain")
-	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
 	game._process(0.02)
 	check(game.free_play and game.journey_resume["chapter"]==0 and game.journey_resume["progress"]==0,"Finishing the cycle leaves a fresh first-night journey in the garden")
 	check(game._journey_entry_label()=="もう一度","The completed cycle offers a replay rather than a misleading continuation")
@@ -918,6 +927,81 @@ func run() -> void:
 		game._sound(i,0.5)
 		check(game.players[slot].pitch_scale==1.0 and game._bell_name(i)==game.NOTE_NAMES[i],"Garden returns every reused bell voice to its original D pentatonic pitch")
 	game.muted = true
+	game.transition_phase = 0
+	game.paused = false
+	game.show_help = false
+	game._new_chapter(5)
+	game.journey_resume = {"chapter":0,"progress":0,"casts":0,"perfects":0}
+	game.listening_resume = {}
+	game._request_transition("journey")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.03)
+	check(game.night_opening and game.chapter==0 and game._night_pan()==0.0,"A first night reveals only its incomplete sky after the quiet interval")
+	check(game._night_name_alpha()==0.0 and game._moon_hint().is_empty(),"The constellation precedes its name and gesture copy")
+	check(game._snapshot_journey()["introSeen"],"Seeing the sky is persisted before an interruption or first cast")
+	var locked_casts: int = game.casts
+	for keycode in [KEY_RIGHT,KEY_SPACE,KEY_ENTER,KEY_R]:
+		var locked_key := InputEventKey.new()
+		locked_key.pressed = true
+		locked_key.keycode = keycode
+		game._input(locked_key)
+	check(game.casts==locked_casts and not game.dragging and game.transition_action=="journey","Repeated game input cannot aim, spend strokes or navigate during the sky introduction")
+	advance_for(1.0)
+	check(game._night_name_alpha()>0.0 and game._night_pan()==0.0,"The name emerges quietly while the sky stays still")
+	var opening_time: float = game.night_opening_time
+	game._input(transition_pause_key)
+	advance_for(0.5)
+	check(is_equal_approx(game.night_opening_time,opening_time),"Pause freezes the viewing interval and camera")
+	game._input(transition_pause_key)
+	game._input(transition_help_key)
+	advance_for(0.5)
+	check(is_equal_approx(game.night_opening_time,opening_time),"Help also freezes the introduction")
+	game._input(transition_help_key)
+	advance_for(game.NIGHT_VIEW-opening_time+game.NIGHT_PAN*0.5)
+	check(absf(game._night_pan()-0.5)<0.001 and game._ground_camera_offset().y>0.0,"The slow descent reveals the instrument through drawing transforms")
+	check(game.theta==0.0 and game.omega==0.0 and game.casts==0,"Camera motion cannot change pendulum physics")
+	advance_for(game.NIGHT_PAN)
+	check(not game.night_opening and game.transition_phase==0 and game._ground_camera_offset()==Vector2.ZERO,"Controls unlock only after the camera reaches ordinary play coordinates")
+	var seen_journey: Dictionary = game._snapshot_journey()
+	game._enter_garden()
+	game.journey_resume = seen_journey
+	game._request_transition("journey")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	check(game.transition_phase==0 and not game.night_opening,"A zero-cast return to the same seen sky does not repeat the introduction")
+	game._request_transition("repeat",0)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	check(game.transition_phase==0 and not game.night_opening and game.night_intro_seen,"Same-night retry keeps the introduction seen")
+	game._new_chapter(5)
+	game.journey_resume = {"chapter":2,"progress":0,"casts":1,"perfects":0}
+	game._request_transition("journey")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	check(game.chapter==2 and not game.night_opening and game.transition_phase==0,"Legacy partial saves skip the introduction even before a first success")
+	game.reduced_motion = true
+	game._request_transition("chapter",3)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.NIGHT_VIEW-0.01)
+	check(game.night_opening and game._night_pan()==0.0,"Reduced motion holds a stationary sky for the full viewing interval")
+	advance_for(game.NIGHT_DISSOLVE+0.02)
+	check(not game.night_opening and game.transition_phase==0 and game._night_pan()==1.0,"Reduced motion dissolves to the instrument without a moving camera")
+	game.reduced_motion = false
+	var total_major_stars := 0
+	var total_missing_stars := 0
+	for night in range(5):
+		game._new_chapter(night)
+		var figure: Dictionary = game.SKY.FIGURES[night]
+		total_major_stars += figure["points"].size()
+		var assigned: Array = []
+		for goal in range(figure["goals"].size()):
+			var group: Array = figure["goals"][goal]
+			check(group.size()==(2 if game._goal_kind_at(goal)=="duet" else 1),"A real constellation preserves the existing goal-to-score-layer count")
+			for index in group:
+				check(index>=0 and index<figure["points"].size() and index not in assigned,"Each missing star belongs to exactly one reachable goal")
+				assigned.append(index)
+				total_missing_stars += 1
+		check(figure["points"].size()>assigned.size(),"Every incomplete constellation already contains quiet major stars")
+		var name_font_ok := true
+		for character in game.CHAPTERS[night]["name"]:
+			name_font_ok = name_font_ok and game.FONT.has_char(character.unicode_at(0))
+		check(name_font_ok,"All five real constellation names use available bundled font glyphs")
+	check(total_major_stars==39 and total_missing_stars==15,"Five richer skies retain 11 tasks and exactly 15 musical lights")
 	var original_size := root.size
 	for resolution in [Vector2i(390,844), Vector2i(320,568), Vector2i(1200,863)]:
 		root.size = resolution
@@ -932,6 +1016,15 @@ func run() -> void:
 		check(visible.encloses(title_area),"The moving title moon and its full hit area fit the viewport")
 		check(not title_area.intersects(game.mute_rect),"Sound settings cannot overlap the moon entrance")
 		check(game.INTRO_HIT_RADIUS*2.0*scale>=44.0,"The title moon remains a full touch target on narrow screens")
+		for night in range(5):
+			game._new_chapter(night)
+			check(visible.encloses(game.sky_box),"Every major-star figure fits the final sky on wide and narrow screens")
+			game.night_opening = true
+			game.night_opening_time = 2.0
+			var camera: Dictionary = game._sky_camera()
+			var hero := Rect2(game.sky_box.position*float(camera["scale"])+camera["offset"],game.sky_box.size*float(camera["scale"]))
+			check(visible.encloses(hero) and hero.size.y>=game.sky_box.size.y,"The introduction fits a larger uniformly scaled constellation with whitespace")
+			game.night_opening = false
 		for direction in [-1.0,1.0]:
 			game._new_chapter(1)
 			cast_until_judged(direction*0.5)

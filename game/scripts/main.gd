@@ -9,6 +9,7 @@ const FONT = preload("res://assets/fonts/MoonSerifUI.tres")
 const BELL_ANGLES = [-0.96, -0.66, -0.34, 0.0, 0.34, 0.66, 0.96]
 const NOTE_NAMES = ["D3", "A3", "D4", "E4", "F♯4", "B4", "D5"]
 const CHAPTERS = preload("res://scripts/constellation.gd").NIGHTS
+const SKY = preload("res://scripts/sky_figures.gd")
 const PALETTES = [
 	{"name":"蒼の夜", "ink":Color("071b28"), "deep":Color("102c37"), "gold":Color("ecd7a4"), "teal":Color("85d4c9")},
 	{"name":"灯りの夜", "ink":Color("211c26"), "deep":Color("3e2a35"), "gold":Color("f3cf95"), "teal":Color("d6aaa1")},
@@ -143,6 +144,15 @@ var transition_time := 0.0
 var transition_action := ""
 var transition_chapter := 0
 var transition_resume: Dictionary = {}
+var transition_skip_opening := false
+var night_opening := false
+var night_opening_time := 0.0
+var night_intro_seen := false
+var sky_points := PackedVector2Array()
+var sky_box := Rect2()
+const NIGHT_VIEW = 3.6
+const NIGHT_PAN = 4.0
+const NIGHT_DISSOLVE = 0.5
 const TRANSITION_OUT = 1.8
 const TRANSITION_QUIET = 0.4
 const TRANSITION_IN = 0.8
@@ -263,6 +273,11 @@ func _layout() -> void:
 		else:
 			retry_rect = Rect2(size.x*0.5-110.0,bottom_y-20.0,220.0,72.0)
 			next_rect = Rect2()
+	var portrait_sky := size.y > size.x*1.20
+	var sky_top := 145.0 if portrait_sky else 24.0
+	var sky_height := maxf(45.0,minf(156.0,pivot.y-sky_top-42.0))
+	sky_points = SKY.fit(chapter,Rect2(size.x*0.5-minf(size.x*0.62,350.0)*0.5,sky_top,minf(size.x*0.62,350.0),sky_height))
+	sky_box = SKY.bounds(Array(sky_points))
 	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
 	help_rect = Rect2(size.x - 202.0, 20.0, 66.0, 66.0)
 	pause_rect = Rect2(size.x - 276.0, 20.0, 66.0, 66.0)
@@ -799,10 +814,11 @@ func _request_transition(action: String, index: int = 0) -> void:
 	transition_time = continue_time
 	transition_action = action
 	transition_chapter = index
+	transition_skip_opening = action=="repeat" or (action=="chapter" and index==chapter and not free_play)
 	transition_resume = {}
 	if action in ["chapter","restart","repeat"]:
 		listening_resume = {}
-		transition_resume = {"chapter":index if action in ["chapter","repeat"] else 0,"progress":0,"casts":0,"perfects":0}
+		transition_resume = {"chapter":index if action in ["chapter","repeat"] else 0,"progress":0,"casts":0,"perfects":0,"introSeen":transition_skip_opening}
 	elif action=="garden" and not free_play:
 		transition_resume = _snapshot_journey()
 		_finish_cycle_for_garden()
@@ -829,12 +845,23 @@ func _advance_transition(delta: float) -> void:
 			"garden": _enter_garden()
 			"journey": _return_to_journey()
 			"restart": _return_to_journey(true)
+		if transition_skip_opening:
+			night_intro_seen = true
+		if not free_play and not chapter_done and not night_intro_seen:
+			night_opening = true
+			night_opening_time = transition_time
+			night_intro_seen = true
+			_save()
 		_sound(2,0.30)
 		transition_resume = {}
 		_publish_state()
-	if transition_phase==2 and transition_time>=TRANSITION_IN:
+	if transition_phase==2 and night_opening:
+		night_opening_time = transition_time
+	var duration := NIGHT_VIEW+(NIGHT_DISSOLVE if reduced_motion else NIGHT_PAN) if night_opening else TRANSITION_IN
+	if transition_phase==2 and transition_time>=duration:
 		transition_phase = 0
 		transition_time = 0.0
+		night_opening = false
 		_publish_state()
 
 func _judge_turn() -> void:
@@ -1023,8 +1050,8 @@ func _journey_entry_label() -> String:
 
 func _snapshot_journey() -> Dictionary:
 	if chapter_done:
-		return {"chapter":(chapter+1)%CHAPTERS.size(),"progress":0,"casts":0,"perfects":0}
-	return {"chapter":chapter,"progress":progress,"casts":casts,"perfects":perfects,"lit":lit_goals.duplicate()}
+		return {"chapter":(chapter+1)%CHAPTERS.size(),"progress":0,"casts":0,"perfects":0,"introSeen":false}
+	return {"chapter":chapter,"progress":progress,"casts":casts,"perfects":perfects,"lit":lit_goals.duplicate(),"introSeen":night_intro_seen}
 
 func _start() -> void:
 	var entrance_angle := _intro_angle()
@@ -1062,6 +1089,7 @@ func _return_to_journey(restart: bool = false) -> void:
 	_set_goal_mask(resume.get("lit"))
 	casts = maxi(0,int(resume.get("casts",0)))
 	perfects = maxi(0,int(resume.get("perfects",0)))
+	night_intro_seen = bool(resume.get("introSeen",false)) or progress>0 or casts>0
 	if not listening.is_empty():
 		progress = CHAPTERS[chapter]["targets"].size()
 		_set_goal_mask()
@@ -1070,6 +1098,7 @@ func _return_to_journey(restart: bool = false) -> void:
 		chapter_done = true
 		coda_started = true
 		finish_time = 7.0
+		night_intro_seen = true
 	night_music.restore(_music_piece_count(),chapter_done,_music_layer_mask())
 	_layout()
 	feedback = "金の輪で折り返すと、上の星が灯る。" if _goal_kind()=="main" else "鐘の力を、小さな月の光へ届けよう。"
@@ -1101,6 +1130,9 @@ func _retry(clear_cadence: bool = true) -> void:
 
 func _new_chapter(index: int) -> void:
 	_clear_turn_advice()
+	night_opening = false
+	night_opening_time = 0.0
+	night_intro_seen = false
 	free_play = index == CHAPTERS.size()
 	chapter = 2 if free_play else clampi(index, 0, CHAPTERS.size()-1)
 	if free_play:
@@ -1376,8 +1408,11 @@ func _draw() -> void:
 	_draw_echoes()
 	_draw_turn_advice()
 	_draw_light_flights()
+	draw_set_transform(Vector2.ZERO)
 	_draw_header()
-	if started:
+	if night_opening:
+		_draw_night_name()
+	elif started:
 		_draw_score()
 		if retry_rect.size.x>0.0:
 			_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"))
@@ -1389,6 +1424,9 @@ func _draw() -> void:
 		var t := clampf(transition_time/(TRANSITION_OUT if transition_phase==1 else TRANSITION_IN),0.0,1.0)
 		var ease := t*t*(3.0-2.0*t)
 		draw_rect(Rect2(Vector2.ZERO,size),Color(_tone_color("ink"),ease if transition_phase==1 else 1.0-ease))
+	if night_opening and reduced_motion and night_opening_time>=NIGHT_VIEW:
+		var dissolve := clampf((night_opening_time-NIGHT_VIEW)/NIGHT_DISSOLVE,0.0,1.0)
+		draw_rect(Rect2(Vector2.ZERO,size),Color(_tone_color("ink"),sin(dissolve*PI)))
 	if show_help and started:
 		_draw_help()
 	if paused and started and not show_help:
@@ -1398,6 +1436,9 @@ func _draw() -> void:
 		_pause_button()
 
 func _sky_position(index: int) -> Vector2:
+	if not free_play:
+		var group: Array = SKY.FIGURES[chapter]["goals"][index]
+		return sky_points[int(group[0])]
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
 	var span := minf(size.x * 0.60, 350.0)
 	var t := float(index) / float(maxi(1,count-1))
@@ -1411,6 +1452,12 @@ func _sky_position(index: int) -> Vector2:
 
 func _draw_sky_constellation() -> void:
 	if not started:
+		return
+	if not free_play:
+		var camera := _sky_camera()
+		draw_set_transform(camera["offset"],0.0,Vector2.ONE*float(camera["scale"]))
+		_draw_night_stars()
+		draw_set_transform(_ground_camera_offset())
 		return
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
 	for i in range(count):
@@ -1428,6 +1475,71 @@ func _draw_sky_constellation() -> void:
 		if not free_play and _goal_kind_at(i)=="duet":
 			draw_circle(pos + Vector2(7,7), 1.8, _tone_color("gold") if lit else Color("335661"))
 
+func _sky_star_goal(index: int) -> int:
+	var groups: Array = SKY.FIGURES[chapter]["goals"]
+	for goal in range(groups.size()):
+		if index in groups[goal]:return goal
+	return -1
+
+func _sky_star_lit(index: int) -> bool:
+	var goal := _sky_star_goal(index)
+	return goal<0 or lit_goals[goal]
+
+func _draw_night_stars() -> void:
+	var figure: Dictionary = SKY.FIGURES[chapter]
+	for edge in figure["edges"]:
+		var connected := _sky_star_lit(int(edge[0])) and _sky_star_lit(int(edge[1]))
+		var color := Color(_tone_color("gold"),0.36 if chapter_done else 0.19) if connected else Color(_tone_color("teal"),0.065)
+		draw_line(sky_points[int(edge[0])],sky_points[int(edge[1])],color,0.85,true)
+	for index in range(sky_points.size()):
+		var pos := sky_points[index]
+		var goal := _sky_star_goal(index)
+		var earned := goal>=0 and lit_goals[goal]
+		if goal>=0 and not earned:
+			draw_arc(pos,3.5,0,TAU,16,Color(_tone_color("teal"),0.31),0.7,true)
+		elif earned:
+			_glow(pos,5.0,_tone_color("gold"),_coda_light()*1.2 if chapter_done else 1.0)
+			draw_circle(pos,2.0,_tone_color("gold"))
+			draw_line(pos-Vector2(4,0),pos+Vector2(4,0),Color(_tone_color("gold"),0.55),0.75,true)
+			draw_line(pos-Vector2(0,4),pos+Vector2(0,4),Color(_tone_color("gold"),0.55),0.75,true)
+		else:
+			draw_circle(pos,1.75,Color(WHITE,0.76 if chapter_done else 0.52))
+
+func _night_pan() -> float:
+	if not night_opening:return 1.0
+	if reduced_motion:return 1.0 if night_opening_time>=NIGHT_VIEW+NIGHT_DISSOLVE*0.5 else 0.0
+	var t := clampf((night_opening_time-NIGHT_VIEW)/NIGHT_PAN,0.0,1.0)
+	return t*t*t*(t*(t*6.0-15.0)+10.0)
+
+func _sky_camera() -> Dictionary:
+	if not night_opening:return {"offset":Vector2.ZERO,"scale":1.0}
+	var box := sky_box
+	var scale := minf(minf(size.x*0.70,620.0)/box.size.x,minf(size.y*0.38,400.0)/box.size.y)
+	var offset := Vector2(size.x*0.5,size.y*0.36)-box.get_center()*scale
+	var pan := _night_pan()
+	return {"offset":offset*(1.0-pan),"scale":lerpf(scale,1.0,pan)}
+
+func _ground_camera_offset() -> Vector2:
+	# A near plane enters from below while the distant sky draws back. Drawing
+	# transforms never change physics or touch coordinates; input stays locked.
+	return Vector2(0,(1.0-_night_pan())*(size.y+80.0))
+
+func _night_name_alpha() -> float:
+	return clampf((night_opening_time-0.8)/1.0,0.0,1.0)*(1.0-smoothstep(0.15,0.65,_night_pan()))
+
+func _draw_night_name() -> void:
+	var alpha := _night_name_alpha()
+	if alpha<=0.0:return
+	var camera := _sky_camera()
+	var box := sky_box
+	var initial_scale := minf(minf(size.x*0.70,620.0)/box.size.x,minf(size.y*0.38,400.0)/box.size.y)
+	var name_y := maxf(size.y*0.69,size.y*0.36+box.size.y*initial_scale*0.5+68.0)
+	var name_world := box.get_center()+Vector2(0,(name_y-size.y*0.36)/initial_scale)
+	var pos: Vector2 = name_world*float(camera["scale"])+camera["offset"]
+	var font_size := int(roundf(minf(38.0,size.x*0.069)*float(camera["scale"])/initial_scale))
+	_text(["I","II","III","IV","V"][chapter],pos-Vector2(0,float(font_size)+18.0),15,Color(MUTED,alpha*0.66),true)
+	_text(CHAPTERS[chapter]["name"],pos,font_size,Color(_tone_color("gold"),alpha*0.92),true)
+
 func _flight_point(start: Vector2, finish: Vector2, t: float) -> Vector2:
 	var ease_t := t*t*(3.0-2.0*t)
 	return start.lerp(finish,ease_t) + Vector2(sin(t*TAU)*18.0, -sin(t*PI)*42.0)
@@ -1435,12 +1547,17 @@ func _flight_point(start: Vector2, finish: Vector2, t: float) -> Vector2:
 func _draw_light_flights() -> void:
 	for flight in light_flights:
 		var t := clampf(float(flight["age"]) / 1.25, 0.0, 1.0)
-		var finish := _sky_position(int(flight["index"]))
 		var start: Vector2 = flight["from"]
-		for i in range(6):
-			var tail_t := maxf(0.0, t-float(i)*0.045)
-			draw_circle(_flight_point(start, finish, tail_t), 2.8-float(i)*0.32, Color(0.96,0.85,0.61,0.8-float(i)*0.11))
-		_glow(_flight_point(start,finish,t), 7.0, _tone_color("gold"), 1.2)
+		var destinations: Array = [_sky_position(int(flight["index"]))]
+		if not free_play:
+			destinations.clear()
+			for star in SKY.FIGURES[chapter]["goals"][int(flight["index"])]:
+				destinations.append(sky_points[int(star)])
+		for finish in destinations:
+			for i in range(6):
+				var tail_t := maxf(0.0,t-float(i)*0.045)
+				draw_circle(_flight_point(start,finish,tail_t),2.8-float(i)*0.32,Color(0.96,0.85,0.61,0.8-float(i)*0.11))
+			_glow(_flight_point(start,finish,t),7.0,_tone_color("gold"),1.2)
 
 func _draw_background() -> void:
 	draw_rect(Rect2(Vector2.ZERO,size),_tone_color("ink").lerp(_tone_color("deep"),garden_energy*0.10))
@@ -1451,8 +1568,11 @@ func _draw_background() -> void:
 		draw_rect(Rect2(0.0, y, size.x, size.y / 20.0 + 1.0), c)
 	for star in stars:
 		var pos := Vector2(star["x"] * size.x, 90.0 + star["y"] * (size.y * 0.58))
+		if night_opening:
+			pos.y = fposmod(pos.y+(1.0-_night_pan())*size.y*0.62,size.y)
 		var alpha: float = 0.32 if reduced_motion else 0.23 + 0.20 * sin(elapsed * 0.55 + star["phase"])
 		draw_circle(pos, star["r"], Color(0.66, 0.8, 0.79, alpha))
+	draw_set_transform(_ground_camera_offset())
 	var pond_y := pivot.y + length + 71.0
 	# Keep the resonant water visible above the score, including wide windows.
 	var horizon := minf(pond_y, size.y - 321.0)
@@ -1512,16 +1632,17 @@ func _draw_header() -> void:
 		_text("月の振り子",Vector2(size.x*0.5,title_y),42,_tone_color("gold"),true)
 		_text("Moon Pendulum",Vector2(size.x*0.5,title_y+30.0),17,Color(MUTED,0.82),true)
 		return
-	_text("月の振り子", Vector2(30.0, 49.0), 30, _tone_color("gold"))
+	if not night_opening:
+		_text("月の振り子",Vector2(30.0,49.0),30,_tone_color("gold"))
 	if started:
 		_button(mute_rect, "音 OFF" if muted else "音 ON")
 		_button(help_rect, "？")
 		_pause_button()
-		if reset_rect.size.x>0.0:
+		if reset_rect.size.x>0.0 and not night_opening:
 			_button(reset_rect,GRAVITY_NAMES[gravity_index] if free_play else "庭へ")
 
 func _moon_hint() -> String:
-	if not started:
+	if not started or night_opening:
 		return ""
 	if dragging:
 		return "離す"
@@ -1749,6 +1870,9 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 			var lit = journey["lit"]
 			if not lit is Array or lit.size()!=CHAPTERS[index]["targets"].size() or not lit.all(func(item):return item is bool) or lit.count(true)!=int(journey["progress"]):return null
 			clean_journey["lit"] = lit.duplicate()
+		if journey.has("introSeen"):
+			if not journey["introSeen"] is bool:return null
+			clean_journey["introSeen"] = journey["introSeen"]
 	var clean_garden: Dictionary = {}
 	if not garden.is_empty():
 		var lights = garden.get("lights")
@@ -1817,6 +1941,8 @@ func _publish_state() -> void:
 		state["castJudged"] = cast_judged
 		state["echoTurns"] = [echoes[0]["turns"],echoes[1]["turns"]]
 		state["journeyEntry"] = _journey_entry_label()
+		var camera := _sky_camera()
+		state["opening"] = {"active":night_opening,"seen":night_intro_seen,"time":night_opening_time,"pan":_night_pan(),"nameAlpha":_night_name_alpha() if night_opening else 0.0,"scale":camera["scale"],"offset":[camera["offset"].x,camera["offset"].y],"groundOffset":_ground_camera_offset().y,"name":CHAPTERS[chapter]["name"],"stars":sky_points.size(),"missing":SKY.FIGURES[chapter]["goals"]}
 		var moon_angle := theta if started else _intro_angle()
 		var mass := _point(moon_angle)
 		var origin := _moon_origin(mass,moon_angle,_moon_radius())
