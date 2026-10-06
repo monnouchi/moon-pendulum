@@ -3,7 +3,7 @@ Usage: python tools/subset_font.py /path/to/NotoSerifCJK-Regular.ttc
 Requires the official fonttools Python package. Normal builds do not need it.
 """
 from pathlib import Path
-import argparse, base64
+import argparse, base64, io
 from fontTools.ttLib import TTFont
 from fontTools import subset
 
@@ -14,6 +14,11 @@ args = parser.parse_args()
 text = ''.join(p.read_text() for p in (root/'game').rglob('*.gd'))
 text += (root/'game/web_shell.html').read_text()
 text += ''.join(chr(i) for i in range(32, 127)) + '▶Ⅱ←→？♯〜↻'
+# Keep earlier game copy available when extending the same bundled font.
+previous = root/'game/assets/fonts/MoonSans.ttf.b64'
+if previous.exists():
+    with TTFont(io.BytesIO(base64.b64decode(previous.read_bytes()))) as bundled:
+        text += ''.join(chr(code) for code in bundled.getBestCmap())
 font = TTFont(str(args.source_font), fontNumber=0)
 options = subset.Options()
 options.name_IDs = ['*']

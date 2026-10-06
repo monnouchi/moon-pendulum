@@ -71,7 +71,7 @@ func run() -> void:
 	check(absf(game.theta) <= game.MAX_PULL, "Drag cannot exceed physical angle limit")
 	game._retry()
 	check(game.theta == 0.0 and not game.swinging, "Retry restores stationary moon")
-	var solutions := [[-0.58,0.85,1.0],[-0.98,-1.12],[0.98,-1.05],[-1.13,1.20],[-1.12,-1.20]]
+	var solutions := [[-0.58,0.85,1.0],[0.90,0.98],[1.0,-1.05],[-1.05,-1.20],[1.11,1.14]]
 	for chapter_index in range(game.CHAPTERS.size()):
 		game._new_chapter(chapter_index)
 		var expected_pieces := 0
@@ -90,16 +90,75 @@ func run() -> void:
 			for tick in range(240):
 				game._process(1.0/60.0)
 				game._physics_process(1.0/60.0)
-			check(game.progress==before+1,"One cast cannot consume a following light")
+			check(game.progress==before+1,"Finished strokes cannot award the same light twice")
 		check(game.chapter_done,"Every optional night can complete")
 		check(game.night_music.completed and game.night_music.completion_starts==1,"Every night reaches its full score once")
+	for combo in [{"chapter":0,"angle":0.98,"lit":[false,true,true]},{"chapter":1,"angle":0.98,"lit":[true,true]},{"chapter":2,"angle":-1.09,"lit":[true,true]},{"chapter":3,"angle":1.13,"lit":[true,true]},{"chapter":4,"angle":1.14,"lit":[true,true]}]:
+		game._new_chapter(combo["chapter"])
+		cast_until_judged(combo["angle"])
+		check(game.casts==1 and game.lit_goals==combo["lit"],"One real release can light multiple independent constellation goals")
+		check(game.night_music.active_layers==game._music_layer_mask(),"A light earned out of order keeps its own musical layer")
+		var settled_lights: Array = game.lit_goals.duplicate()
+		for tick in range(600):
+			game._process(1.0/60.0)
+			game._physics_process(1.0/60.0)
+		check(game.lit_goals==settled_lights and game.casts==1,"Later oscillations cannot silently fill further lights or add strokes")
+		if combo["chapter"]==0:
+			cast_until_judged(-0.58)
+			check(game.chapter_done and game.casts==2 and game.best_casts[0]==2,"A deliberate combined stroke improves the first night's best")
+		else:
+			check(game.chapter_done and game.best_casts[combo["chapter"]]==1 and game.night_music.completion_starts==1,"A one-stroke constellation records one best result and one musical completion")
+	game._new_chapter(0)
+	cast_until_judged(0.85)
+	var unordered_save: Dictionary = game._snapshot_journey()
+	check(unordered_save["lit"]==[false,true,false] and unordered_save["casts"]==1,"A checkpoint remembers the actual light rather than assuming a prefix")
+	game._retry()
+	check(game.casts==1 and game.lit_goals==[false,true,false] and game.night_music.active_layers==[false,true,false],"Pull retry retains spent strokes, earned lights and their music")
+	game.journey_resume = unordered_save
+	game.listening_resume = {}
+	game._return_to_journey()
+	check(game.casts==1 and game.lit_goals==[false,true,false] and game.night_music.active_layers==[false,true,false],"An unordered unfinished constellation restores the same music")
+	var record_before_repeat: Array = game.best_casts.duplicate()
+	game._request_transition("repeat",0)
+	check(game.transition_resume["casts"]==0 and game.transition_resume["progress"]==0,"Whole-night retry commits its fresh intent before the curtain")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	check(game.casts==0 and game.progress==0 and game.night_music.pieces==0 and game.best_casts==record_before_repeat,"Whole-night retry clears the constellation while retaining its record")
+	game.dragging = true
+	game.theta = 0.07
+	game._release()
+	check(game.casts==0,"An abandoned tiny aiming gesture does not spend a stroke")
+	game.dragging = true
+	game.theta = 0.18
+	game._release()
+	game._release()
+	check(game.casts==1,"Repeated release events cannot count one gesture twice")
+	for chapter_index in range(5):
+		for direction in [-1.0,1.0]:
+			game._new_chapter(chapter_index)
+			cast_until_judged(direction*0.18)
+			check(game.progress==0 and game.casts==1 and game.cast_judged,"Weak real releases spend one stroke without inventing a light")
+			game._new_chapter(chapter_index)
+			cast_until_judged(direction*game.MAX_PULL)
+			check(not game.chapter_done and game.casts==1,"The strongest possible pull cannot automatically complete a night")
+	game._new_chapter(0)
+	game.best_casts[0] = 0
+	for miss in range(4):cast_until_judged(0.18)
+	for angle in solutions[0]:cast_until_judged(angle)
+	check(game.chapter_done and game.casts==7 and game.best_casts[0]==7,"Exceeding the suggested strokes still permits completion and records the real count")
+	game._new_chapter(0)
+	cast_until_judged(0.98)
+	cast_until_judged(-0.58)
+	check(game.best_casts[0]==2,"A replay can improve a stored stroke record")
+	game._new_chapter(0)
+	for angle in solutions[0]:cast_until_judged(angle)
+	check(game.casts==3 and game.best_casts[0]==2,"A slower replay cannot replace the player's better record")
 	# Each duet must accept the same gesture from either side. Keep the
 	# smaller gestures unsuccessful so the pair still requires both echoes.
-	for duet_case in [{"chapter":1,"angles":[0.98,1.12]},{"chapter":4,"angles":[1.12,1.20]}]:
+	for duet_case in [{"chapter":1,"angles":[0.98,0.90]},{"chapter":4,"angles":[1.14,1.11]}]:
 		for target_index in range(2):
 			for direction in [-1.0,1.0]:
 				game._new_chapter(duet_case["chapter"])
-				game.progress = target_index
+				game._set_goal_mask([target_index!=0,target_index!=1])
 				game.dragging = true
 				game.theta = direction * duet_case["angles"][target_index]
 				game._release()
@@ -107,8 +166,8 @@ func run() -> void:
 				for tick in range(300):
 					game._process(1.0/60.0)
 					game._physics_process(1.0/60.0)
-				check(game.progress==target_index+1,"Every duet target is reachable from either side")
-				check(game.duet_checked[0] and game.duet_checked[1] and game.duet_errors.max()<=0.095,"Both duet turns meet the unchanged hit tolerance")
+				check(game.progress==2 and game.lit_goals[target_index],"Each outer and inner duet target is reachable from either side")
+				check(game.cast_goal_checks[target_index][0] and game.cast_goal_checks[target_index][1] and game.cast_goal_errors[target_index].max()<=game._goal_tolerance(target_index),"Both moon turns meet the new night's tolerance")
 		for direction in [-1.0,1.0]:
 			game._new_chapter(duet_case["chapter"])
 			game.dragging = true
@@ -123,7 +182,7 @@ func run() -> void:
 	game.dragging = true
 	game.theta = 1.0
 	game._release()
-	check(game.cast_judged and game.feedback.contains("側から"), "Relay teaches its different release direction")
+	check(not game.cast_judged,"Either relay release stays eligible while the moon moves")
 	game._retry()
 	check(game.feedback.contains("小さな月"), "Relay retry keeps its own relevant instruction")
 	game._new_chapter(4)
@@ -156,8 +215,8 @@ func run() -> void:
 	for tick in range(200):
 		game._process(1.0 / 60.0)
 		game._physics_process(1.0 / 60.0)
-	check(game.progress == 0, "Wrong-side launch does not earn a target")
-	check(game.feedback.contains("反対側"), "Wrong-side launch gives helpful feedback")
+	check(game.progress==1 and game.lit_goals[0],"A returning main moon can light a star from the same-side release")
+	check(game.casts==1,"The outbound and returning turn still count as one stroke")
 	game._retry()
 	game.dragging = true
 	game.theta = -0.18
@@ -165,7 +224,7 @@ func run() -> void:
 	for tick in range(200):
 		game._process(1.0 / 60.0)
 		game._physics_process(1.0 / 60.0)
-	check(game.feedback.contains("大きく"), "Short pull gives an actionable hint")
+	check(not game.turn_advice.is_empty(),"A short pull leaves a comparison with an unlit target")
 	game._retry()
 	game.dragging = true
 	game.theta = -0.6
@@ -264,12 +323,14 @@ func run() -> void:
 	check(game.palette_index==(palette_before+1)%3,"Night changes both palette and timbre bank")
 	game._new_chapter(2)
 	game.progress = game.CHAPTERS[2]["targets"].size()
+	game._set_goal_mask()
 	game.chapter_done = true
 	game._enter_garden()
 	game._return_to_journey()
 	check(game.chapter==3 and game.progress==0,"Garden detour returns after completed third night, not to first")
 	game._new_chapter(0)
 	game.progress = 1
+	game._set_goal_mask()
 	game.casts = 2
 	game._enter_garden()
 	game._return_to_journey()
@@ -283,7 +344,7 @@ func run() -> void:
 	for tick in range(240):
 		game._process(1.0/60.0)
 		game._physics_process(1.0/60.0)
-	check(game.cast_judged and game.feedback.contains("外側"),"Weak relay has an actionable outer-bell hint")
+	check(game.cast_judged and not game.turn_advice.is_empty(),"A weak relay closes its stroke and compares a real turn")
 	game._new_chapter(1)
 	game.dragging = true
 	game.theta = -0.68
@@ -291,7 +352,7 @@ func run() -> void:
 	for tick in range(240):
 		game._process(1.0/60.0)
 		game._physics_process(1.0/60.0)
-	check(game.cast_judged and game.feedback.contains("外側"),"Partial duet cannot wait forever for an unreachable second bell")
+	check(game.cast_judged and game.progress==0,"A weak duet closes after the available physical turns")
 	game._new_chapter(1)
 	game.dragging = true
 	game.theta = -1.05
@@ -330,13 +391,13 @@ func run() -> void:
 	cast_until_judged(-0.58)
 	check(game.progress==1 and game.turn_advice.is_empty() and game.miss_streak==0,"A real successful cast removes the advice and resets consecutive misses")
 	game._new_chapter(0)
+	game._set_goal_mask([false,true,true])
 	cast_until_judged(-0.8)
 	cast_until_judged(-0.8)
 	check(game.turn_advice[0]["word"]=="少しやさしく","An overshoot asks for a gentler pull")
 	game._new_chapter(0)
 	cast_until_judged(0.6)
-	cast_until_judged(0.6)
-	check(game.turn_advice[0]["word"]=="反対側から","Wrong-side fold-backs receive the relevant short word")
+	check(game.progress==1 and game.turn_advice.is_empty(),"A successful return does not retain an obsolete wrong-side instruction")
 	game._new_chapter(1)
 	cast_until_judged(-0.8)
 	check(game.miss_streak==1 and game.turn_advice.size()==2 and game.night_music.pieces==0,"Two missed duet moons count as one unsuccessful attempt without a music layer")
@@ -350,7 +411,7 @@ func run() -> void:
 	game._new_chapter(3)
 	cast_until_judged(-0.8)
 	cast_until_judged(-0.8)
-	check(game.turn_advice.size()==1 and game.turn_advice[0]["side"]==0 and game.turn_advice[0]["word"]=="もう少し大きく","Relay advice follows its measured secondary moon")
+	check(game.turn_advice.any(func(c):return c["side"]>=0 and c["word"]=="もう少し大きく"),"Relay advice follows its measured secondary moon among the unlit targets")
 	var advice_help := InputEventKey.new()
 	advice_help.keycode = KEY_H
 	advice_help.pressed = true
@@ -401,6 +462,20 @@ func run() -> void:
 	check(game._config_from_checkpoint(broken)==null,"Text schema versions fail quietly")
 	check(restored.get_value("settings","gravity")==1,"Old checkpoints default to standard gravity")
 	check(restored.get_value("music","listening",{})=={},"Old checkpoints remain valid without an optional listening record")
+	check(restored.get_value("casts_best","0",-1)==0,"Old ratings never become invented stroke records")
+	var unordered_checkpoint: Dictionary = checkpoint.duplicate(true)
+	unordered_checkpoint["journey"] = {"chapter":0,"progress":1,"casts":3,"perfects":1,"lit":[false,true,false]}
+	unordered_checkpoint["bestCasts"] = [2,0,0,0,0]
+	var unordered_config: ConfigFile = game._config_from_checkpoint(unordered_checkpoint)
+	check(unordered_config!=null and unordered_config.get_value("journey","resume")["lit"]==[false,true,false] and unordered_config.get_value("casts_best","0")==2,"Version one extends safely with unordered lights and stroke records")
+	for invalid_lit in [[true,false], [false,1,false], [true,true,false]]:
+		var malformed: Dictionary = unordered_checkpoint.duplicate(true)
+		malformed["journey"]["lit"] = invalid_lit
+		check(game._config_from_checkpoint(malformed)==null,"Malformed light masks cannot corrupt a saved constellation")
+	for invalid_records in [[true,0,0,0,0],[-1,0,0,0,0],[2,0],"2"]:
+		var malformed: Dictionary = unordered_checkpoint.duplicate(true)
+		malformed["bestCasts"] = invalid_records
+		check(game._config_from_checkpoint(malformed)==null,"Malformed stroke records cannot replace a valid save")
 	var listening_checkpoint: Dictionary = checkpoint.duplicate(true)
 	listening_checkpoint["listening"] = {"chapter":1,"casts":2,"perfects":2}
 	var listening_config: ConfigFile = game._config_from_checkpoint(listening_checkpoint)
@@ -552,6 +627,7 @@ func run() -> void:
 	game._new_chapter(0)
 	check(game.next_rect.size==Vector2.ZERO and game.retry_rect.size.x>0,"An unfinished night does not show a premature next action")
 	game.progress = 2
+	game._set_goal_mask()
 	game._process(1.0/60.0)
 	game._award_goal(0.01,game._goal_position())
 	check(game.coda_started and game.night_music.completed and game.night_music.pieces==3 and game.night_music.bass_entries==1,"Completion immediately starts the continuing full score and bass once")
@@ -827,7 +903,7 @@ func run() -> void:
 		cast_until_judged(-0.8)
 		check(game.turn_advice.all(func(c):return game._turn_advice_word_rect(c).has_area() and visible.encloses(game._turn_advice_word_rect(c))),"Both missed duet words fit even the narrowest viewport")
 	root.size = original_size
-	print("PASS: %d gameplay checks, all 11 optional exercises / 15 lights across 5 nights" % checks)
+	print("PASS: %d gameplay checks, all 11 constellation goals / 15 lights across 5 nights" % checks)
 	game.paused = true
 	game._stop_audio(true)
 	await create_timer(0.12).timeout

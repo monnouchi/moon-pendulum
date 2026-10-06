@@ -8,13 +8,7 @@ const HARMONY = preload("res://scripts/night_harmony.gd")
 const FONT = preload("res://assets/fonts/MoonSerifUI.tres")
 const BELL_ANGLES = [-0.96, -0.66, -0.34, 0.0, 0.34, 0.66, 0.96]
 const NOTE_NAMES = ["D3", "A3", "D4", "E4", "F♯4", "B4", "D5"]
-const CHAPTERS = [
-	{"name":"I · はじめの光", "targets":[0.55,-0.80,0.68], "kinds":["main","main","relay"]},
-	{"name":"II · 二つの月", "targets":[0.65,0.77], "kind":"duet"},
-	{"name":"III · 音の残り香", "targets":[-0.92,-0.72], "kinds":["main","relay"]},
-	{"name":"IV · 連鎖の回廊", "targets":[-0.80,0.86], "kind":"relay"},
-	{"name":"V · 月へ帰る旋律", "targets":[0.78,0.86], "kind":"duet"}
-]
+const CHAPTERS = preload("res://scripts/constellation.gd").NIGHTS
 const PALETTES = [
 	{"name":"蒼の夜", "ink":Color("071b28"), "deep":Color("102c37"), "gold":Color("ecd7a4"), "teal":Color("85d4c9")},
 	{"name":"灯りの夜", "ink":Color("211c26"), "deep":Color("3e2a35"), "gold":Color("f3cf95"), "teal":Color("d6aaa1")},
@@ -59,6 +53,12 @@ var chapter := 0
 var progress := 0
 var casts := 0
 var perfects := 0
+var lit_goals: Array[bool] = []
+var cast_goal_hits: Array = []
+var cast_goal_checks: Array = []
+var cast_goal_errors: Array = []
+var main_turns := 0
+var cast_awards := 0
 var chapter_done := false
 var show_help := false
 var target_pulse := 0.0
@@ -113,6 +113,7 @@ var voice := 0
 var start_rect := Rect2()
 var tour_rect := Rect2()
 var help_restart_rect := Rect2()
+var help_repeat_rect := Rect2()
 var retry_rect := Rect2()
 var next_rect := Rect2()
 var reset_rect := Rect2()
@@ -121,6 +122,7 @@ var help_rect := Rect2()
 var pause_rect := Rect2()
 var stage_rect := Rect2()
 var best_chapters: Array = [0, 0, 0, 0, 0]
+var best_casts: Array = [0, 0, 0, 0, 0]
 var testing := false
 var save_revision := 0
 var duet_hits: Array[bool] = [false, false]
@@ -264,12 +266,45 @@ func _layout() -> void:
 	var start_y := clampf(pivot.y+length+91.0,size.y*0.55,size.y-180.0)
 	start_rect = Rect2(size.x * 0.5 - 72.0, start_y, 144.0, 66.0)
 	tour_rect = Rect2(size.x*0.5-100.0,start_rect.end.y+20.0,200.0,66.0)
-	help_restart_rect = Rect2(size.x*0.5-126.0,size.y*0.26+470.0,252.0,66.0)
+	help_repeat_rect = Rect2(size.x*0.5-126.0,size.y*0.26+420.0,252.0,56.0)
+	help_restart_rect = Rect2(size.x*0.5-126.0,size.y*0.26+490.0,252.0,66.0)
+
+func _goal_index() -> int:
+	var count: int = CHAPTERS[chapter]["targets"].size()
+	if lit_goals.size()!=count:
+		return mini(progress,count-1)
+	for index in range(count):
+		if not lit_goals[index]:return index
+	return count-1
+
+func _set_goal_mask(value: Variant = null) -> void:
+	lit_goals.clear()
+	var valid: bool = value is Array and value.size()==CHAPTERS[chapter]["targets"].size() and value.all(func(item):return item is bool)
+	for index in range(CHAPTERS[chapter]["targets"].size()):
+		lit_goals.append(bool(value[index]) if valid else index<progress)
+	progress = lit_goals.count(true)
+
+func _goal_kind_at(index: int) -> String:
+	var score: Dictionary = CHAPTERS[chapter]
+	return str(score["kinds"][index] if score.has("kinds") else score.get("kind","main"))
+
+func _uses_echo_goals() -> bool:
+	return not free_play
+
+func _goal_tolerance(index: int) -> float:
+	return float(CHAPTERS[chapter].get("main_tolerance",HIT_TOLERANCE)) if _goal_kind_at(index)=="main" else float(CHAPTERS[chapter]["echo_tolerance"])
+
+func _echo_target_at(index: int, side: int) -> float:
+	var target: float = CHAPTERS[chapter]["targets"][index]
+	if _goal_kind_at(index)=="duet":
+		var inward: bool = CHAPTERS[chapter].get("inward",[false,false])[index]
+		return (-1.0 if side==0 else 1.0)*(-1.0 if inward else 1.0)*absf(target)*0.96
+	return target
 
 func _target() -> float:
 	if chapter_done or free_play:
 		return 0.0
-	return float(CHAPTERS[chapter]["targets"][progress])
+	return float(CHAPTERS[chapter]["targets"][_goal_index()])
 
 func _point(angle: float, radius: float = -1.0) -> Vector2:
 	var r := length if radius < 0.0 else radius
@@ -341,11 +376,12 @@ func _physics_process(delta: float) -> void:
 		if ((previous_theta - a) * (theta - a) <= 0.0) and absf(omega) > 0.12 and bell_cooldowns[i] <= 0.0:
 			_ring(i, clampf(absf(omega) * 0.35, 0.3, 1.0))
 	if cast_crossed_center and previous_omega * omega < 0.0:
-		if not has_last_turn:
-			last_turn = theta
-			has_last_turn = true
-		if not cast_judged:
+		last_turn = theta
+		has_last_turn = true
+		if not cast_judged and main_turns<2:
+			main_turns += 1
 			_judge_turn()
+			_close_cast_when_done()
 	if not reduced_motion:
 		trail.append(_point(theta))
 		if trail.size() > 115:
@@ -368,17 +404,17 @@ func _ring(index: int, strength: float = 0.8) -> void:
 		if garden_flight_cooldowns[index] <= 0.0 and not reduced_motion:
 			light_flights.append({"from":_point(float(BELL_ANGLES[index]),length+15.0),"index":index,"age":0.0})
 			garden_flight_cooldowns[index] = 1.4
-	if chapter > 0 or _goal_kind() in ["relay","duet"]:
+	if chapter > 0 or _uses_echo_goals():
 		if index == 1 or index == 5:
 			var side := 0 if index == 1 else 1
 			echoes[side]["charged"] = true
 			echoes[side]["stored"] = clampf(0.75 + absf(omega) * 1.12, 0.0, 3.6)
-			if _goal_kind() in ["relay", "duet"]:
+			if _uses_echo_goals():
 				omega *= 0.97
 		elif index == 3:
 			for e in echoes:
 				if e["charged"]:
-					var impulse: float = e["stored"] if _goal_kind() in ["relay", "duet"] else (1.8 + strength * 1.4)
+					var impulse: float = e["stored"] if _uses_echo_goals() else (1.8 + strength * 1.4)
 					e["omega"] = clampf(float(e["omega"]) + (-1.0 if int(e["side"]) == 0 else 1.0) * impulse, -3.6, 3.6)
 					e["cast_id"] = casts
 					e["glow"] = 1.0
@@ -393,9 +429,18 @@ func _ring(index: int, strength: float = 0.8) -> void:
 
 
 func _reset_echoes() -> void:
+	main_turns = 0
+	cast_awards = 0
+	cast_goal_hits.clear()
+	cast_goal_checks.clear()
+	cast_goal_errors.clear()
+	for index in range(CHAPTERS[chapter]["targets"].size()):
+		cast_goal_hits.append([false,false])
+		cast_goal_checks.append([false,false])
+		cast_goal_errors.append([0.0,0.0])
 	echoes = [
-		{"side":0, "theta":0.0, "omega":0.0, "charged":false, "glow":0.0, "cooldown":0.0, "stored":0.0, "cast_id":-1, "judged_cast":-1},
-		{"side":1, "theta":0.0, "omega":0.0, "charged":false, "glow":0.0, "cooldown":0.0, "stored":0.0, "cast_id":-1, "judged_cast":-1}
+		{"side":0, "theta":0.0, "omega":0.0, "charged":false, "glow":0.0, "cooldown":0.0, "stored":0.0, "cast_id":-1, "judged_cast":-1,"turns":0},
+		{"side":1, "theta":0.0, "omega":0.0, "charged":false, "glow":0.0, "cooldown":0.0, "stored":0.0, "cast_id":-1, "judged_cast":-1,"turns":0}
 	]
 	chain_rings = 0
 	duet_hits = [false, false]
@@ -404,11 +449,11 @@ func _reset_echoes() -> void:
 	duet_offsets = [0.0, 0.0]
 
 func _echo_pivot(side: int) -> Vector2:
-	var spacing := 0.32 if _goal_kind() in ["relay", "duet"] else 0.73
+	var spacing := 0.32 if _uses_echo_goals() else 0.73
 	return pivot + Vector2((-1.0 if side == 0 else 1.0) * length * spacing, length * 0.11)
 
 func _echo_length() -> float:
-	return length * (0.42 if _goal_kind() in ["relay", "duet"] else 0.26)
+	return length * (0.42 if _uses_echo_goals() else 0.26)
 
 func _echo_point(side: int, angle: float) -> Vector2:
 	return _echo_pivot(side) + Vector2(sin(angle), cos(angle)) * _echo_length()
@@ -416,15 +461,10 @@ func _echo_point(side: int, angle: float) -> Vector2:
 func _goal_kind() -> String:
 	if free_play:
 		return "free"
-	if CHAPTERS[chapter].has("kinds"):
-		var kinds: Array = CHAPTERS[chapter]["kinds"]
-		return str(kinds[mini(progress,kinds.size()-1)])
-	return str(CHAPTERS[chapter].get("kind","main"))
+	return _goal_kind_at(_goal_index())
 
 func _echo_target(side: int) -> float:
-	if _goal_kind() == "duet":
-		return (-1.0 if side == 0 else 1.0) * absf(_target()) * 0.96
-	return _target()
+	return _echo_target_at(_goal_index(),side)
 
 func _clear_turn_advice() -> void:
 	turn_advice.clear()
@@ -432,6 +472,11 @@ func _clear_turn_advice() -> void:
 	advice_cast = -1
 
 func _record_turn_advice(side: int, angle: float, target: float, word: String = "") -> void:
+	var previous := _turn_advice_for(side)
+	if advice_cast==casts and not previous.is_empty() and absf(float(previous["angle"])-float(previous["target"]))<=absf(angle-target):
+		previous["remaining"] = TURN_ADVICE_SECONDS
+		if side<0:last_turn = float(previous["angle"])
+		return
 	if advice_cast!=casts:
 		miss_streak += 1
 		advice_cast = casts
@@ -463,16 +508,16 @@ func _turn_advice_word_rect(cue: Dictionary) -> Rect2:
 			var note_at := bell_at+Vector2(0,35)
 			blockers.append(Rect2(note_at-Vector2(note_width*0.5+6,16),Vector2(note_width+12,22)))
 	for e in echoes:
-		if chapter==0 and _goal_kind()=="main":
-			continue
 		var echo_side := int(e["side"])
 		var ep := _echo_pivot(echo_side)
 		blockers.append(Rect2(ep-Vector2(13,13),Vector2(26,26)))
-		if side<0 and _goal_kind() in ["relay","duet"]:
+		if side<0 and not free_play:
 			# An uncharged moon can remain still for the whole comparison.
 			blockers.append(Rect2(_echo_point(echo_side,0.0)-Vector2(18,18),Vector2(36,36)))
-			if _goal_kind()=="duet" or echo_side==(0 if _target()<0.0 else 1):
-				blockers.append(Rect2(_echo_point(echo_side,_echo_target(echo_side))-Vector2(21,21),Vector2(42,42)))
+			for index in range(lit_goals.size()):
+				if lit_goals[index] or _goal_kind_at(index)=="main":continue
+				if _goal_kind_at(index)=="duet" or echo_side==(0 if float(CHAPTERS[chapter]["targets"][index])<0.0 else 1):
+					blockers.append(Rect2(_echo_point(echo_side,_echo_target_at(index,echo_side))-Vector2(21,21),Vector2(42,42)))
 		if _pitch_labels_visible():
 			blockers.append(Rect2(ep+Vector2(-20,_echo_length()+29),Vector2(40,22)))
 	var rect := Rect2()
@@ -493,8 +538,6 @@ func _turn_advice_word_rect(cue: Dictionary) -> Rect2:
 	if rect.intersects(Rect2(_point(theta)-Vector2(36,36),Vector2(72,72))):
 		return Rect2()
 	for e in echoes:
-		if chapter==0 and _goal_kind()=="main":
-			continue
 		if rect.intersects(Rect2(_echo_point(int(e["side"]),float(e["theta"]))-Vector2(15,15),Vector2(30,30))):
 			return Rect2()
 	return rect
@@ -534,9 +577,11 @@ func _echo_physics(delta: float) -> void:
 		e["glow"] = maxf(0.0, float(e["glow"]) - delta * 0.70)
 		e["cooldown"] = maxf(0.0, float(e["cooldown"]) - delta)
 		if old_omega * float(e["omega"]) < 0.0 and absf(float(e["theta"])) > 0.08:
-			if int(e["cast_id"]) == casts and int(e["judged_cast"]) != casts:
+			if int(e["cast_id"]) == casts and int(e["turns"])<2 and not cast_judged:
+				e["turns"] += 1
 				e["judged_cast"] = casts
 				_judge_echo_turn(int(e["side"]), float(e["theta"]))
+				_close_cast_when_done()
 		if old * float(e["theta"]) < 0.0 and absf(float(e["omega"])) > 0.25 and float(e["cooldown"]) <= 0.0:
 			e["cooldown"] = 0.28
 			e["glow"] = 1.0
@@ -549,7 +594,7 @@ func _echo_physics(delta: float) -> void:
 				ripples.append({"pos": _echo_pivot(int(e["side"])) + Vector2(0.0, _echo_length()), "age":0.0, "strength":0.6})
 
 func _draw_echoes() -> void:
-	if not started or (chapter == 0 and _goal_kind() == "main"):
+	if not started:
 		return
 	for e in echoes:
 		var side: int = e["side"]
@@ -564,18 +609,21 @@ func _draw_echoes() -> void:
 		draw_arc(ep, el, PI*0.5-0.9, PI*0.5+0.9, 32, Color(0.39,0.62,0.59,0.12), 1.0, true)
 		draw_circle(ep, 4.0, _tone_color("gold") if e["charged"] else MUTED)
 		_draw_moon(ep,bob,float(e["theta"]),10.0,Color("6a9690").lerp(_tone_color("teal"),glow),glow*1.3,Color("80a497"),1.0)
-		if not chapter_done and _goal_kind() in ["relay", "duet"]:
-			if _goal_kind() == "duet" or side == (0 if _target() < 0.0 else 1):
-				var target_angle := _echo_target(side)
+		if not chapter_done and not free_play:
+			for index in range(lit_goals.size()):
+				if lit_goals[index] or _goal_kind_at(index)=="main":continue
+				if _goal_kind_at(index)=="relay" and side!=(0 if float(CHAPTERS[chapter]["targets"][index])<0.0 else 1):continue
+				var target_angle := _echo_target_at(index,side)
 				var beacon := _echo_point(side, target_angle)
 				_glow(beacon, 18.0, _tone_color("gold"), 1.4)
 				draw_arc(beacon, 20.0 if reduced_motion else 20.0 + sin(elapsed * 2.5) * 1.2, 0.0, TAU, 32, _tone_color("gold"), 1.5, true)
-				draw_arc(ep, el, PI*0.5-target_angle-0.095, PI*0.5-target_angle+0.095, 14, Color(0.91,0.80,0.50,0.32), 4.0, true)
-				if _goal_kind()=="duet" and duet_hits[side] and not cast_judged:
+				var tolerance := _goal_tolerance(index)
+				draw_arc(ep,el,PI*0.5-target_angle-tolerance,PI*0.5-target_angle+tolerance,14,Color(0.91,0.80,0.50,0.32),4.0,true)
+				if cast_goal_hits[index][side] and not cast_judged:
 					draw_circle(beacon,5.0,_tone_color("gold"))
-				if has_last_echo_turn[side] and (not swinging or cast_judged or dragging) and _turn_advice_for(side).is_empty():
-					var previous := _echo_point(side,last_echo_turns[side])
-					draw_arc(previous,6.0,0.0,TAU,20,Color(WHITE,0.50),1.0,true)
+			if has_last_echo_turn[side] and (not swinging or cast_judged or dragging) and _turn_advice_for(side).is_empty():
+				var previous := _echo_point(side,last_echo_turns[side])
+				draw_arc(previous,6.0,0.0,TAU,20,Color(WHITE,0.50),1.0,true)
 		if _pitch_labels_visible():
 			_text(str(HARMONY.NIGHTS[_harmony_index()]["echo_names"][_echo_index(side)]),ep+Vector2(0.0,el+45.0),11,MUTED,true)
 
@@ -625,16 +673,24 @@ func _play_coda() -> void:
 	if coda_started or free_play:
 		return
 	coda_started = true
-	night_music.unlock(_music_piece_count(),true,_goal_kind()=="duet")
+	night_music.unlock(_music_piece_count(),true,_goal_kind()=="duet",_music_layer_mask())
 
 func _music_piece_count() -> int:
 	var count := 0
 	var score: Dictionary = CHAPTERS[chapter]
 	var kinds: Array = score.get("kinds",[])
-	for index in range(mini(progress,score["targets"].size())):
+	for index in range(score["targets"].size()):
+		if index>=lit_goals.size() or not lit_goals[index]:continue
 		var kind := str(kinds[index] if index<kinds.size() else score.get("kind","main"))
 		count += 2 if kind=="duet" else 1
 	return count
+
+func _music_layer_mask() -> Array[bool]:
+	var mask: Array[bool] = []
+	for index in range(CHAPTERS[chapter]["targets"].size()):
+		for piece in range(2 if _goal_kind_at(index)=="duet" else 1):
+			mask.append(index<lit_goals.size() and lit_goals[index])
+	return mask
 
 func _coda_light() -> float:
 	if reduced_motion:
@@ -712,9 +768,9 @@ func _transition_audio_gain() -> float:
 	return 1.0-ease if transition_phase==1 else ease
 
 func _request_transition(action: String, index: int = 0) -> void:
-	if action not in ["chapter","garden","journey","restart"] or (transition_phase!=0 and action!="restart"):
+	if action not in ["chapter","garden","journey","restart","repeat"] or (transition_phase!=0 and action not in ["restart","repeat"]):
 		return
-	if action=="chapter" and (index<0 or index>=CHAPTERS.size()):
+	if action in ["chapter","repeat"] and (index<0 or index>=CHAPTERS.size()):
 		return
 	var continue_time := 0.0
 	if transition_phase==1:
@@ -728,9 +784,9 @@ func _request_transition(action: String, index: int = 0) -> void:
 	transition_action = action
 	transition_chapter = index
 	transition_resume = {}
-	if action in ["chapter","restart"]:
+	if action in ["chapter","restart","repeat"]:
 		listening_resume = {}
-		transition_resume = {"chapter":index if action=="chapter" else 0,"progress":0,"casts":0,"perfects":0}
+		transition_resume = {"chapter":index if action in ["chapter","repeat"] else 0,"progress":0,"casts":0,"perfects":0}
 	elif action=="garden" and not free_play:
 		transition_resume = _snapshot_journey()
 		_finish_cycle_for_garden()
@@ -753,7 +809,7 @@ func _advance_transition(delta: float) -> void:
 		transition_phase = 2
 		transition_time -= TRANSITION_OUT+TRANSITION_QUIET
 		match transition_action:
-			"chapter": _new_chapter(transition_chapter)
+			"chapter", "repeat": _new_chapter(transition_chapter)
 			"garden": _enter_garden()
 			"journey": _return_to_journey()
 			"restart": _return_to_journey(true)
@@ -766,123 +822,107 @@ func _advance_transition(delta: float) -> void:
 		_publish_state()
 
 func _judge_turn() -> void:
-	if _goal_kind() in ["relay", "duet"]:
-		var required_sides: Array = [0,1] if _goal_kind() == "duet" else [0 if _target() < 0.0 else 1]
-		for side in required_sides:
-			var e: Dictionary = echoes[side]
-			if int(e["cast_id"]) != casts and not bool(e["charged"]):
-				cast_judged = true
-				feedback = "もう少し大きく引いて、外側の鐘へ。"
-				feedback_timer = 5.0
-				_record_turn_advice(-1,theta,signf(theta)*0.66,"もう少し大きく")
-				_publish_state()
-				return
-		return
-	cast_judged = true
-	if chapter_done or free_play:
-		return
-	var target := _target()
-	var error := absf(theta - target)
-	if error <= HIT_TOLERANCE:
-		_award_goal(error, _point(target))
-	else:
-		if signf(theta) != signf(target):
-			feedback = "光の反対側へ引いてから、放してみよう。"
-		elif absf(theta) < absf(target):
-			feedback = "あと少し大きく引くと、光へ届きそう。"
-		else:
-			feedback = "少しやさしく。光の近くで折り返そう。"
-		feedback_timer = 5.0
-		_record_turn_advice(-1,theta,target)
+	if chapter_done or free_play:return
+	var nearest := -1
+	var nearest_error := INF
+	for index in range(lit_goals.size()):
+		if lit_goals[index] or _goal_kind_at(index)!="main":continue
+		var target: float = CHAPTERS[chapter]["targets"][index]
+		var error := absf(theta-target)
+		if error<=_goal_tolerance(index):
+			_award_goal(error,_point(target),index)
+			return
+		if error<nearest_error:
+			nearest = index
+			nearest_error = error
+	if nearest>=0 and cast_awards==0:
+		_record_turn_advice(-1,theta,float(CHAPTERS[chapter]["targets"][nearest]))
 	_publish_state()
 
-func _award_goal(error: float, where: Vector2) -> void:
+func _close_cast_when_done() -> void:
 	if chapter_done or free_play:
+		cast_judged = true
 		return
-	_clear_turn_advice()
+	if main_turns<2:return
+	for e in echoes:
+		if int(e["cast_id"])==casts and int(e["turns"])<2:return
 	cast_judged = true
+	if cast_awards==0 and turn_advice.is_empty():
+		_record_turn_advice(-1,theta,signf(theta)*0.66,"もう少し大きく")
+	_publish_state()
+
+func _award_goal(error: float, where: Vector2, index: int = -1) -> void:
+	if chapter_done or free_play:return
+	if index<0:index = _goal_index()
+	if lit_goals[index]:return
+	_clear_turn_advice()
+	lit_goals[index] = true
+	cast_awards += 1
+	progress = lit_goals.count(true)
 	if not reduced_motion:
-		light_flights.append({"from":where, "index":progress, "age":0.0})
-	var perfect := error <= 0.065
-	if perfect:
-		perfects += 1
-	feedback = "澄んだ一音。光がつながった。" if perfect else "届いた！ 次の光へ奏でよう。"
+		light_flights.append({"from":where,"index":index,"age":0.0})
+		for i in range(22):
+			var a := float(i)*TAU/22.0
+			particles.append({"pos":where,"velocity":Vector2(cos(a),sin(a))*(65.0+float(i%3)*22.0),"life":1.7,"color":_tone_color("gold")})
+	if error<=0.065:perfects += 1
+	feedback = "星が灯った。残る光へ、もうひと振り。"
 	feedback_timer = 3.5
 	target_pulse = 1.0
-	var pos := where
-	if not reduced_motion:
-		for i in range(22):
-			var a := float(i) * TAU / 22.0
-			particles.append({"pos": pos, "velocity": Vector2(cos(a), sin(a)) * (65.0 + float(i % 3) * 22.0), "life": 1.7, "color": _tone_color("gold")})
-	var previous_kind := _goal_kind()
-	progress += 1
-	var unit := "組" if previous_kind == "duet" else "つ"
-	feedback = "星が %d/%d %s灯った。次の光へ。" % [progress,CHAPTERS[chapter]["targets"].size(),unit]
-	if _goal_kind() != previous_kind:
-		has_last_turn = false
-		has_last_echo_turn = [false,false]
-		feedback = "星が灯った。今度は小さな月へ。"
-	_sound(4, 0.72)
-	if progress >= CHAPTERS[chapter]["targets"].size():
+	_sound(4,0.72)
+	if progress>=lit_goals.size():
 		chapter_done = true
+		cast_judged = true
 		finish_time = 0.0
 		feedback = "星座が灯った。夜に、旋律が残った。"
-		var rating := 3 if casts <= progress + 1 else (2 if casts <= progress * 2 else 1)
-		best_chapters[chapter] = maxi(int(best_chapters[chapter]), rating)
-		_save()
+		var goal: int = CHAPTERS[chapter]["strokes"]
+		var rating := 3 if casts<=goal else (2 if casts<=goal*2 else 1)
+		best_chapters[chapter] = maxi(int(best_chapters[chapter]),rating)
+		if casts>0 and (int(best_casts[chapter])==0 or casts<int(best_casts[chapter])):best_casts[chapter] = casts
 		_play_coda()
 	else:
-		night_music.unlock(_music_piece_count(),false,previous_kind=="duet")
+		night_music.unlock(_music_piece_count(),false,_goal_kind_at(index)=="duet",_music_layer_mask())
 	_save()
 	_layout()
 	_publish_state()
 
 func _judge_echo_turn(side: int, angle: float) -> void:
-	if chapter_done or free_play or cast_judged or not swinging:
-		return
-	var kind := _goal_kind()
-	if kind not in ["relay", "duet"]:
-		return
-	if kind == "relay" and side != (0 if _target() < 0.0 else 1):
-		return
-	var target := _echo_target(side)
+	if chapter_done or free_play or cast_judged or not swinging:return
 	last_echo_turns[side] = angle
 	has_last_echo_turn[side] = true
-	var error := absf(angle - target)
-	if kind == "relay":
-		cast_judged = true
-		if error <= 0.095:
-			_award_goal(error, _echo_point(side, target))
+	var turn := maxi(1,int(echoes[side]["turns"]))
+	var nearest := -1
+	var nearest_error := INF
+	for index in range(lit_goals.size()):
+		if lit_goals[index]:continue
+		var kind := _goal_kind_at(index)
+		if kind=="main":continue
+		if kind=="relay" and (turn!=1 or side!=(0 if float(CHAPTERS[chapter]["targets"][index])<0.0 else 1)):continue
+		if kind=="duet":
+			var inward: bool = CHAPTERS[chapter]["inward"][index]
+			if turn!=(2 if inward else 1):continue
+		if cast_goal_checks[index][side]:continue
+		var target := _echo_target_at(index,side)
+		var error := absf(angle-target)
+		cast_goal_checks[index][side] = true
+		cast_goal_errors[index][side] = error
+		cast_goal_hits[index][side] = error<=_goal_tolerance(index)
+		if error<nearest_error:
+			nearest = index
+			nearest_error = error
+		if kind=="relay":
+			if cast_goal_hits[index][side]:_award_goal(error,_echo_point(side,target),index)
 		else:
-			feedback = "鐘へ、もう少し強く力を渡そう。" if absf(angle) < absf(target) else "少し小さく引くと、小さな月が光へ届く。"
-			_record_turn_advice(side,angle,target)
-	else:
-		duet_checked[side] = true
-		duet_errors[side] = error
-		duet_offsets[side] = absf(angle) - absf(target)
-		duet_hits[side] = error <= 0.095
-		if not duet_hits[side]:
-			_record_turn_advice(side,angle,target)
-		if duet_hits[side]:
-			feedback = "一つ届いた！ もう一つの月を聴こう。"
-			_sound(4, 0.5)
-			night_music.reply(casts,side)
-		if duet_checked[0] and duet_checked[1]:
-			cast_judged = true
-			if duet_hits[0] and duet_hits[1]:
-				_award_goal(maxf(duet_errors[0], duet_errors[1]), _echo_point(side, target))
-			elif duet_offsets[0] < 0.0 and duet_offsets[1] < 0.0:
-				night_music.clear_replies()
-				feedback = "二つの月へ、もう少し強く力を渡そう。"
-			elif duet_offsets[0] > 0.0 and duet_offsets[1] > 0.0:
-				night_music.clear_replies()
-				feedback = "少しやさしく。二つの月を光へ。"
-			else:
-				night_music.clear_replies()
-				feedback = "二つの月が、光で折り返す強さを探そう。"
-	feedback_timer = 5.0
-	if not turn_advice.is_empty():
-		feedback_timer = 0.0
+			duet_checked = [cast_goal_checks[index][0],cast_goal_checks[index][1]]
+			duet_hits = [cast_goal_hits[index][0],cast_goal_hits[index][1]]
+			duet_errors = [cast_goal_errors[index][0],cast_goal_errors[index][1]]
+			duet_offsets[side] = absf(angle)-absf(target)
+			if cast_goal_hits[index][side]:
+				_sound(4,0.5)
+				night_music.reply(casts*lit_goals.size()+index,side)
+			if cast_goal_hits[index][0] and cast_goal_hits[index][1]:
+				_award_goal(maxf(float(cast_goal_errors[index][0]),float(cast_goal_errors[index][1])),_echo_point(side,target),index)
+	if nearest>=0 and nearest_error>_goal_tolerance(nearest) and cast_awards==0:
+		_record_turn_advice(side,angle,_echo_target_at(nearest,side))
 	_publish_state()
 
 func _begin_pull(pos: Vector2) -> void:
@@ -936,12 +976,9 @@ func _release() -> void:
 	cast_seconds = 0.0
 	feedback = "月が光に届く、その一瞬を聴こう。" if not free_play else "鐘から振り子へ、あなたの音がつながる。"
 	feedback_timer = 3.0
-	if _goal_kind() in ["relay", "duet"]:
+	if not free_play:
+		night_music.clear_replies()
 		_reset_echoes()
-		feedback = "鐘から小さな月へ、力がつながっていく。"
-		if _goal_kind() == "relay" and signf(theta) != signf(_target()):
-			cast_judged = true
-			feedback = "光のある側から、放してみよう。"
 	_save()
 	_publish_state()
 
@@ -971,7 +1008,7 @@ func _journey_entry_label(intro: bool = false) -> String:
 func _snapshot_journey() -> Dictionary:
 	if chapter_done:
 		return {"chapter":(chapter+1)%CHAPTERS.size(),"progress":0,"casts":0,"perfects":0}
-	return {"chapter":chapter,"progress":progress,"casts":casts,"perfects":perfects}
+	return {"chapter":chapter,"progress":progress,"casts":casts,"perfects":perfects,"lit":lit_goals.duplicate()}
 
 func _start_art() -> void:
 	started = true
@@ -1008,16 +1045,18 @@ func _return_to_journey(restart: bool = false) -> void:
 		index = 0
 	_new_chapter(index)
 	progress = clampi(int(resume.get("progress",0)),0,CHAPTERS[chapter]["targets"].size()-1)
+	_set_goal_mask(resume.get("lit"))
 	casts = maxi(0,int(resume.get("casts",0)))
 	perfects = maxi(0,int(resume.get("perfects",0)))
 	if not listening.is_empty():
 		progress = CHAPTERS[chapter]["targets"].size()
+		_set_goal_mask()
 		casts = int(listening["casts"])
 		perfects = int(listening["perfects"])
 		chapter_done = true
 		coda_started = true
 		finish_time = 7.0
-	night_music.restore(_music_piece_count(),chapter_done)
+	night_music.restore(_music_piece_count(),chapter_done,_music_layer_mask())
 	_layout()
 	feedback = "金の輪で折り返すと、上の星が灯る。" if _goal_kind()=="main" else "鐘の力を、小さな月の光へ届けよう。"
 	if chapter_done:
@@ -1059,6 +1098,7 @@ func _new_chapter(index: int) -> void:
 	has_last_echo_turn = [false,false]
 	last_pull_note = -1
 	progress = 0
+	_set_goal_mask()
 	casts = 0
 	perfects = 0
 	chapter_done = false
@@ -1103,7 +1143,10 @@ func _input(event: InputEvent) -> void:
 				return
 			if show_help:
 				show_help = false
-				if help_restart_rect.has_point(pos):
+				if not free_play and help_repeat_rect.has_point(pos):
+					paused = false
+					_request_transition("repeat",chapter)
+				elif help_restart_rect.has_point(pos):
 					paused = false
 					_request_transition("restart")
 				_publish_state()
@@ -1355,16 +1398,17 @@ func _draw_sky_constellation() -> void:
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
 	for i in range(count):
 		var pos := _sky_position(i)
-		var lit := garden_lights[i]>0.23 if free_play else i<progress
+		var lit := garden_lights[i]>0.23 if free_play else lit_goals[i]
 		if i > 0:
-			var line_color := Color(_tone_color("gold"),0.32) if lit else Color(_tone_color("teal"),0.10)
+			var connected: bool = lit and (garden_lights[i-1]>0.23 if free_play else lit_goals[i-1])
+			var line_color := Color(_tone_color("gold"),0.32) if connected else Color(_tone_color("teal"),0.10)
 			draw_line(_sky_position(i-1), pos, line_color, 1.0, true)
 		if lit:
 			_glow(pos, 7.0, _tone_color("gold"), _coda_light()*1.55 if chapter_done else 1.0)
 			draw_line(pos + Vector2(-6,0), pos + Vector2(6,0), Color(0.96,0.87,0.64,0.6), 1.0, true)
 			draw_line(pos + Vector2(0,-6), pos + Vector2(0,6), Color(0.96,0.87,0.64,0.6), 1.0, true)
 		draw_circle(pos, 2.3 if lit else 1.6, _tone_color("gold") if lit else Color("335661"))
-		if _goal_kind() == "duet":
+		if not free_play and _goal_kind_at(i)=="duet":
 			draw_circle(pos + Vector2(7,7), 1.8, _tone_color("gold") if lit else Color("335661"))
 
 func _flight_point(start: Vector2, finish: Vector2, t: float) -> Vector2:
@@ -1498,20 +1542,20 @@ func _draw_stage() -> void:
 		draw_circle(pos + Vector2(0,10), 2.0, _tone_color("gold"))
 		if _pitch_labels_visible():
 			_text(_bell_name(i), pos + Vector2(0, 35), 11, MUTED, true)
-	if started and not chapter_done and _goal_kind() == "main":
-		var target := _target()
-		var target_pos := _point(target)
-		var pulse := 0.75 if reduced_motion else 0.75 + sin(elapsed * 2.5) * 0.15
-		_glow(target_pos, 20.0, _tone_color("gold"), pulse * 1.6)
-		draw_arc(pivot, length, PI * 0.5 - target - HIT_TOLERANCE, PI * 0.5 - target + HIT_TOLERANCE, 18, Color(0.91,0.80,0.50,0.28), 5.0, true)
-		draw_arc(target_pos, 26.0 if reduced_motion else 26.0 + sin(elapsed * 2.5) * 2.0, 0, TAU, 48, Color(0.94,0.84,0.61,0.8), 1.5, true)
-		if str(_turn_advice_for(-1).get("word","")).is_empty():
-			_text("ここで折り返す",target_pos+Vector2(0,-40),16,_tone_color("gold"),true)
-		draw_colored_polygon(PackedVector2Array([target_pos+Vector2(0,-6),target_pos+Vector2(5,0),target_pos+Vector2(0,6),target_pos+Vector2(-5,0)]),_tone_color("gold"))
+	if started and not chapter_done and not free_play:
+		for index in range(lit_goals.size()):
+			if lit_goals[index] or _goal_kind_at(index)!="main":continue
+			var target: float = CHAPTERS[chapter]["targets"][index]
+			var target_pos := _point(target)
+			var tolerance := _goal_tolerance(index)
+			var pulse := 0.75 if reduced_motion else 0.75+sin(elapsed*2.5)*0.15
+			_glow(target_pos,20.0,_tone_color("gold"),pulse*1.6)
+			draw_arc(pivot,length,PI*0.5-target-tolerance,PI*0.5-target+tolerance,18,Color(0.91,0.80,0.50,0.28),5.0,true)
+			draw_arc(target_pos,26.0 if reduced_motion else 26.0+sin(elapsed*2.5)*2.0,0,TAU,48,Color(0.94,0.84,0.61,0.8),1.5,true)
+			draw_colored_polygon(PackedVector2Array([target_pos+Vector2(0,-6),target_pos+Vector2(5,0),target_pos+Vector2(0,6),target_pos+Vector2(-5,0)]),_tone_color("gold"))
 		if has_last_turn and (not swinging or cast_judged or dragging) and _turn_advice_for(-1).is_empty():
 			var previous := _point(last_turn)
 			draw_arc(previous,8.0,0.0,TAU,24,Color(WHITE,0.5),1.0,true)
-			_text("前の折り返し",previous+Vector2(0,24),13,MUTED,true)
 
 	for i in range(1, trail.size()):
 		var c := _tone_color("gold")
@@ -1551,11 +1595,19 @@ func _draw_score() -> void:
 	var total: int = 0 if free_play else CHAPTERS[chapter]["targets"].size()
 	for i in range(total):
 		var pos := Vector2(size.x - 57.0 - float(total - 1 - i) * 26.0, card_y + 27.0)
-		draw_circle(pos, 6.0, _tone_color("gold") if i < progress else Color("2d4a50"))
-		if i == progress and not chapter_done:
+		draw_circle(pos,6.0,_tone_color("gold") if lit_goals[i] else Color("2d4a50"))
+		if not lit_goals[i] and not chapter_done:
 			draw_arc(pos, 9.0, 0, TAU, 24, _tone_color("gold"), 1.0, true)
-	if feedback_timer > 0.0:
-		_text(feedback, Vector2(size.x * 0.5, card_y + 76.0), 20, WHITE, true)
+	var goal_text := "三振りで、この星座を" if int(CHAPTERS[chapter]["strokes"])==3 else "二振りで、この星座を"
+	var record := "%d振り" % casts
+	if int(best_casts[chapter])>0:record += "　自己ベスト %d" % int(best_casts[chapter])
+	_text(record if chapter_done else goal_text,Vector2(49,card_y+66),17,MUTED)
+	if not chapter_done:
+		var tally := "%d振り" % casts
+		var width := FONT.get_string_size(tally,HORIZONTAL_ALIGNMENT_LEFT,-1,17).x
+		_text(tally,Vector2(size.x-49-width,card_y+66),17,MUTED)
+	if feedback_timer>0.0:
+		_text(feedback,Vector2(size.x*0.5,card_y+105),17,WHITE,true)
 
 func _notify_title_rendered() -> void:
 	JavaScriptBridge.eval("window.moonPendulumTitleReady=true;window.dispatchEvent(new Event('moon-pendulum-title-ready'));")
@@ -1582,21 +1634,17 @@ func _draw_help() -> void:
 	var y := size.y * 0.26
 	_text("月の奏で方", Vector2(cx,y), 34,_tone_color("gold"),true)
 	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "金の輪と、前の折り返しを見比べよう。", "失敗しても音は残る。何度でも奏でよう。", "", "← →：角度を調整　Space：放す", "R：引き直す　M：ミュート　P：一時停止 / 再開"]
-	if _goal_kind() in ["relay", "duet"]:
-		lines[0] = "今度は、小さな月の光を狙う。"
-		lines[1] = "外側の鐘を通して、中央の鐘へ戻す。"
-		lines[2] = "蓄えた力が、小さな月を揺らす。"
-		lines[5] = "光のある側から、少し大きく引いてみよう。"
-		if _goal_kind() == "duet":
-			lines[5] = "左でも右でも、二つの光をひと振りで。"
+	if not free_play:
+		lines = ["輪は、どれから灯してもいい。","月を持ち上げ、指を離して見守ろう。","月が戻るまで、響きを見守ろう。","一振りで、いくつかの星へ。","小さな月へは、外側の鐘から中央へ。","左右の月は、外の輪から内の輪へ。","手数を超えても、星座は結べる。","引き直しても、放した振りは残る。","← →：角度　Space：放す","R：引き直す　M：音　P：休む"]
 	if free_play:
 		lines[0] = "光の輪のない、自由な夜。"
 		lines[1] = "月を引いて放すと、鐘が歌う。"
 		lines[2] = "左上の重力で、振れ方を奏で分けよう。"
 		lines[5] = "右下で夜の色と、響きの手触りが変わる。"
 	for i in range(lines.size()):
-		_text(lines[i],Vector2(cx,y+54.0+float(i)*34.0),20,WHITE,true)
-	_text("どこかをタップして閉じる / H",Vector2(cx,y+440.0),17,MUTED,true)
+		_text(lines[i],Vector2(cx,y+54.0+float(i)*(34.0 if free_play else 32.0)),20 if free_play else 18,WHITE,true)
+	_text("どこかをタップして閉じる / H",Vector2(cx,y+(440.0 if free_play else 390.0)),17,MUTED,true)
+	if not free_play:_button(help_repeat_rect,"この夜を結び直す")
 	_button(help_restart_rect,"最初から星を灯す遊び")
 
 func _load_save() -> void:
@@ -1626,6 +1674,8 @@ func _load_save() -> void:
 			garden_scene = stored_garden
 		for i in range(CHAPTERS.size()):
 			best_chapters[i] = int(config.get_value("best", str(i), 0))
+			var stored_best = config.get_value("casts_best",str(i),0)
+			if int(best_chapters[i])>0 and _checkpoint_number(stored_best,0,1e7,true):best_casts[i] = int(stored_best)
 		var listening = _validated_listening(config.get_value("music","listening",{}),best_chapters)
 		listening_resume = listening if listening is Dictionary else {}
 
@@ -1666,6 +1716,10 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	for rating in best:
 		if not _checkpoint_number(rating,0,3,true):
 			return null
+	var records = data.get("bestCasts",[0,0,0,0,0])
+	if not records is Array or records.size()!=CHAPTERS.size():return null
+	for index in range(records.size()):
+		if not _checkpoint_number(records[index],0,1e7,true) or (int(records[index])>0 and int(best[index])==0):return null
 	var listening = _validated_listening(data.get("listening",{}),best)
 	if listening==null:
 		return null
@@ -1678,6 +1732,10 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 			return null
 		for key in ["chapter","progress","casts","perfects"]:
 			clean_journey[key] = int(journey[key])
+		if journey.has("lit"):
+			var lit = journey["lit"]
+			if not lit is Array or lit.size()!=CHAPTERS[index]["targets"].size() or not lit.all(func(item):return item is bool) or lit.count(true)!=int(journey["progress"]):return null
+			clean_journey["lit"] = lit.duplicate()
 	var clean_garden: Dictionary = {}
 	if not garden.is_empty():
 		var lights = garden.get("lights")
@@ -1699,6 +1757,7 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	config.set_value("music","listening",listening)
 	for i in range(best.size()):
 		config.set_value("best",str(i),int(best[i]))
+		config.set_value("casts_best",str(i),int(records[i]))
 	return config
 
 func _save() -> void:
@@ -1725,11 +1784,12 @@ func _save() -> void:
 	config.set_value("garden","scene",garden_scene)
 	for i in range(CHAPTERS.size()):
 		config.set_value("best", str(i), best_chapters[i])
+		config.set_value("casts_best",str(i),best_casts[i])
 	config.save("user://moon_pendulum.cfg")
 	if OS.has_feature("web"):
 		# A versioned JSON checkpoint contains only the small game-state schema.
 		# Storage may be blocked by browser policy; keep filesystem saving intact.
-		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters,"listening":listening_resume}
+		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters,"bestCasts":best_casts,"listening":listening_resume}
 		JavaScriptBridge.eval("(function(){try{window.localStorage.setItem("+JSON.stringify(WEB_SAVE_KEY)+","+JSON.stringify(JSON.stringify(checkpoint))+");}catch(e){}})()")
 
 func _publish_state() -> void:
@@ -1737,6 +1797,12 @@ func _publish_state() -> void:
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
+		state["lit"] = lit_goals.duplicate()
+		state["strokeGoal"] = CHAPTERS[chapter]["strokes"]
+		state["bestCasts"] = best_casts.duplicate()
+		state["mainTurns"] = main_turns
+		state["castJudged"] = cast_judged
+		state["echoTurns"] = [echoes[0]["turns"],echoes[1]["turns"]]
 		state["journeyEntry"] = _journey_entry_label(not started)
 		var cues: Array = []
 		for cue in turn_advice:

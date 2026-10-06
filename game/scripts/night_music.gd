@@ -12,6 +12,7 @@ var bass_stream: AudioStreamWAV
 var bass_streams: Array[AudioStreamWAV] = []
 var night := -1
 var pieces := 0
+var active_layers: Array[bool] = []
 var completed := false
 var time := 0.0
 var last_step := -1
@@ -64,7 +65,7 @@ func begin(index: int, restored_pieces: int = 0, restored_complete: bool = false
 	generation += 1
 	night = clampi(index,0,SCORES.size()-1)
 	bass_stream = bass_streams[night]
-	pieces = clampi(restored_pieces,0,SCORES[night]["layers"].size())
+	_set_layers(restored_pieces)
 	completed = restored_complete
 	time = 0.0
 	last_step = -1
@@ -93,8 +94,14 @@ func leave(duration: float) -> void:
 		else:
 			_tween(index,0.0,duration,"stop")
 
-func restore(count: int, finished: bool) -> void:
-	pieces = clampi(count,0,SCORES[night]["layers"].size())
+func _set_layers(count: int, mask: Variant = null) -> void:
+	active_layers.clear()
+	for index in range(SCORES[night]["layers"].size()):
+		active_layers.append(bool(mask[index]) if mask is Array else index<count)
+	pieces = active_layers.count(true)
+
+func restore(count: int, finished: bool, mask: Variant = null) -> void:
+	_set_layers(count,mask)
 	completed = finished
 
 func _exit_tree() -> void:
@@ -123,13 +130,14 @@ func suspend(immediate: bool = false) -> void:
 		else:
 			_tween(index,0.0,0.08,"pause")
 
-func unlock(count: int, finished: bool, paired: bool = false) -> void:
+func unlock(count: int, finished: bool, paired: bool = false, mask: Variant = null) -> void:
 	if night<0 or leaving:
 		return
-	var previous := pieces
-	pieces = clampi(maxi(pieces,count),0,SCORES[night]["layers"].size())
+	var previous := active_layers.duplicate()
+	_set_layers(maxi(pieces,count),mask)
 	if enabled and not paired:
-		for layer in range(previous,pieces):
+		for layer in range(active_layers.size()):
+			if not active_layers[layer] or previous[layer]:continue
 			var first: Array = SCORES[night]["layers"][layer][0]
 			_note(layer,int(first[1]),float(first[2])*0.72,"reply")
 	if finished and not completed:
@@ -193,7 +201,8 @@ func advance(delta: float, allowed: bool, transition_gain: float, interrupted: b
 		for event in SCORES[night]["base"]:
 			if int(event[0])==position:
 				_play(instruments[night][0],int(event[1]),50,float(event[2]),-20.0,"base")
-		for layer in range(pieces):
+		for layer in range(active_layers.size()):
+			if not active_layers[layer]:continue
 			for event in SCORES[night]["layers"][layer]:
 				if int(event[0])==position:
 					_note(layer,int(event[1]),float(event[2]),"phrase")
@@ -320,4 +329,4 @@ func snapshot() -> Dictionary:
 		var curtain := master_gain if int(voice["generation"])==generation and not voice["tail"] else 1.0
 		if _active(players[index]) and not players[index].stream_paused and float(voice["gain"])*float(voice.get("return_gain",1.0))*curtain*duck_gain>0.00001:
 			audible += 1
-	return {"night":night,"pieces":pieces,"complete":completed,"time":time,"enabled":enabled and not leaving,"audibleVoices":audible,"completionStarts":completion_starts,"bassEntries":bass_entries,"replies":replies,"phraseNotes":phrase_notes}
+	return {"night":night,"pieces":pieces,"layers":active_layers.duplicate(),"complete":completed,"time":time,"enabled":enabled and not leaving,"audibleVoices":audible,"completionStarts":completion_starts,"bassEntries":bass_entries,"replies":replies,"phraseNotes":phrase_notes}
