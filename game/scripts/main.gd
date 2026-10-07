@@ -139,6 +139,9 @@ var duet_errors: Array[float] = [0.0, 0.0]
 var duet_offsets: Array[float] = [0.0, 0.0]
 var reduced_motion := false
 var echoes: Array[Dictionary] = []
+var echo_returns: Array[Dictionary] = []
+var echo_transfers: Array[Dictionary] = []
+const ECHO_SIGNAL_SECONDS = 0.70
 var chain_rings := 0
 var harmonic_time := 0.0
 var title_frame_queued := false
@@ -378,6 +381,12 @@ func _process(delta: float) -> void:
 			bell_cooldowns[i] = maxf(0.0, bell_cooldowns[i] - delta)
 		target_pulse = maxf(0.0, target_pulse - delta * 0.55)
 		feedback_timer = maxf(0.0, feedback_timer - delta)
+		for effect in echo_returns:
+			effect["age"] += delta
+		echo_returns = echo_returns.filter(func(effect): return float(effect["age"])<ECHO_SIGNAL_SECONDS)
+		for effect in echo_transfers:
+			effect["age"] += delta
+		echo_transfers = echo_transfers.filter(func(effect): return float(effect["age"])<ECHO_SIGNAL_SECONDS)
 		for cue in turn_advice:
 			cue["remaining"] -= delta
 		turn_advice = turn_advice.filter(func(cue): return float(cue["remaining"])>0.0)
@@ -447,6 +456,7 @@ func _ring(index: int, strength: float = 0.8) -> void:
 			var side := 0 if index == 1 else 1
 			echoes[side]["charged"] = true
 			echoes[side]["stored"] = clampf(0.75 + absf(omega) * 1.12, 0.0, 3.6)
+			_signal_echo_transfer(side,"charge")
 			if _uses_echo_goals():
 				omega *= 0.97
 		elif index == 3:
@@ -457,6 +467,7 @@ func _ring(index: int, strength: float = 0.8) -> void:
 					e["cast_id"] = casts
 					e["glow"] = 1.0
 					e["charged"] = false
+					_signal_echo_transfer(int(e["side"]),"release")
 	var pos := _point(float(BELL_ANGLES[index]), length + 11.0)
 	if not reduced_motion:
 		ripples.append({"pos": pos, "age": 0.0, "strength": strength})
@@ -466,7 +477,13 @@ func _ring(index: int, strength: float = 0.8) -> void:
 			particles.append({"pos": pos, "velocity": Vector2(cos(a), sin(a)) * 33.0, "life": 0.9, "color": _tone_color("teal")})
 
 
-func _reset_echoes() -> void:
+func _reset_echoes(show_return: bool = false) -> void:
+	# The physical reset remains immediate. Only its brief light has a lifetime.
+	echo_returns.clear()
+	echo_transfers.clear()
+	if show_return and started and not free_play:
+		for e in echoes:
+			echo_returns.append({"side":e["side"],"angle":e["theta"],"age":0.0})
 	main_turns = 0
 	cast_awards = 0
 	cast_goal_hits.clear()
@@ -644,6 +661,7 @@ func _draw_echoes() -> void:
 		var wire_color := _tone_color("gold") if e["charged"] else Color("355358")
 		draw_line(feed, ep + Vector2(0.0, el + 20.0), Color(wire_color, 0.55), 1.0, true)
 		draw_line(ep + Vector2(0.0, el + 20.0), ep, Color(wire_color, 0.55), 1.0, true)
+		_draw_echo_signals(side)
 		draw_arc(ep, el, PI*0.5-0.9, PI*0.5+0.9, 32, Color(0.39,0.62,0.59,0.12), 1.0, true)
 		draw_circle(ep, 4.0, _tone_color("gold") if e["charged"] else MUTED)
 		_draw_moon(ep,bob,float(e["theta"]),10.0,Color("6a9690").lerp(_tone_color("teal"),glow),glow*1.3,Color("80a497"),1.0)
@@ -664,6 +682,49 @@ func _draw_echoes() -> void:
 				draw_arc(previous,6.0,0.0,TAU,20,Color(WHITE,0.50),1.0,true)
 		if _pitch_labels_visible():
 			_text(str(HARMONY.NIGHTS[_harmony_index()]["echo_names"][_echo_index(side)]),ep+Vector2(0.0,el+45.0),11,MUTED,true)
+
+func _signal_echo_transfer(side: int, kind: String) -> void:
+	# One light per side and stage; rapid ringing never builds a queue.
+	echo_transfers = echo_transfers.filter(func(effect): return int(effect["side"])!=side or str(effect["kind"])!=kind)
+	echo_transfers.append({"side":side,"kind":kind,"age":0.0})
+
+func _draw_echo_signals(side: int) -> void:
+	var ep := _echo_pivot(side)
+	var el := _echo_length()
+	var rest := ep+Vector2(0.0,el)
+	for effect in echo_returns:
+		if int(effect["side"])!=side:continue
+		var t := clampf(float(effect["age"])/ECHO_SIGNAL_SECONDS,0.0,1.0)
+		var fade := 1.0-t*t*(3.0-2.0*t)
+		var old_angle: float = effect["angle"]
+		var returning := old_angle if reduced_motion else old_angle*fade
+		if absf(old_angle)>0.02:
+			draw_arc(ep,el,PI*0.5-maxf(old_angle,0.0),PI*0.5-minf(old_angle,0.0),24,Color(WHITE,0.28*fade),1.2,true)
+			if not reduced_motion:
+				var glint := _echo_point(side,returning)
+				_glow(glint,4.0,WHITE,0.65*fade)
+				draw_circle(glint,1.7,Color(WHITE,0.72*fade))
+		draw_arc(rest,14.0,0.0,TAU,32,Color(WHITE,0.48*fade),1.2,true)
+		_glow(rest,13.0,WHITE,0.55*fade)
+	for effect in echo_transfers:
+		if int(effect["side"])!=side:continue
+		var t := clampf(float(effect["age"])/ECHO_SIGNAL_SECONDS,0.0,1.0)
+		var fade := 1.0-t*t*(3.0-2.0*t)
+		var charging := str(effect["kind"])=="charge"
+		var path := PackedVector2Array([
+			_point((-0.66 if side==0 else 0.66) if charging else 0.0,length+15.0),
+			ep+Vector2(0.0,el+20.0) if charging else ep,
+			ep if charging else _echo_point(side,float(echoes[side]["theta"]))
+		])
+		var color := _tone_color("gold") if charging else _tone_color("teal")
+		draw_polyline(path,Color(color,(0.38 if reduced_motion else 0.20)*fade),1.5,true)
+		if not reduced_motion:
+			var first := path[0].distance_to(path[1])
+			var second := path[1].distance_to(path[2])
+			var distance := (first+second)*minf(t/0.78,1.0)
+			var glint := path[0].lerp(path[1],distance/maxf(first,0.001)) if distance<first else path[1].lerp(path[2],clampf((distance-first)/maxf(second,0.001),0.0,1.0))
+			_glow(glint,5.0,color,0.80*fade)
+			draw_circle(glint,2.0,Color(color,0.85*fade))
 
 func _tone_color(key: String) -> Color:
 	var a: Color = palette_origin.get(key,PALETTES[palette_from][key])
@@ -1029,7 +1090,7 @@ func _release() -> void:
 	feedback_timer = 3.0
 	if not free_play:
 		night_music.clear_replies()
-		_reset_echoes()
+		_reset_echoes(true)
 	_save()
 	_publish_state()
 
@@ -1125,7 +1186,7 @@ func _retry(clear_cadence: bool = true) -> void:
 	omega = 0.0
 	theta = 0.0
 	trail.clear()
-	_reset_echoes()
+	_reset_echoes(clear_cadence)
 	if clear_cadence:
 		cadence_notes.clear()
 	feedback = "光の反対側へ引いて、もうひと振り。" if not free_play else "光のない夜を、好きな音で奏でよう。"
@@ -2053,6 +2114,7 @@ func _publish_state() -> void:
 		state["mainTurns"] = main_turns
 		state["castJudged"] = cast_judged
 		state["echoTurns"] = [echoes[0]["turns"],echoes[1]["turns"]]
+		state["echoSignals"] = {"returns":echo_returns.duplicate(true),"transfers":echo_transfers.duplicate(true),"reducedMotion":reduced_motion}
 		state["journeyEntry"] = _journey_entry_label()
 		var camera := _sky_camera()
 		state["skyScene"] = _sky_scene_state(camera)
