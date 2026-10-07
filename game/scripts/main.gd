@@ -40,6 +40,7 @@ const COMPLETION_FEEDBACK = "星座が灯った。夜に、旋律が残った。
 const COMPLETION_FEEDBACK_HOLD = 3.5
 const COMPLETION_FEEDBACK_FADE = 1.5
 const COMPLETION_FEEDBACK_FADE_REDUCED = 0.5
+const FEEDBACK_CROSSFADE = 0.30
 
 var size := Vector2.ZERO
 var pivot := Vector2.ZERO
@@ -76,6 +77,11 @@ var target_pulse := 0.0
 var finish_time := 0.0
 var feedback := "光の輪へ、反対側から月を届かせよう。"
 var feedback_timer := 0.0
+var feedback_hold := 3.0
+var feedback_fade := 1.0
+var feedback_previous := ""
+var feedback_previous_alpha := 0.0
+var feedback_blend := 0.0
 var note_label := ""
 var bell_glows: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 var bell_cooldowns: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -128,6 +134,7 @@ var reset_rect := Rect2()
 var mute_rect := Rect2()
 var help_rect := Rect2()
 var pause_rect := Rect2()
+var resume_rect := Rect2()
 var stage_rect := Rect2()
 var best_chapters: Array = [0, 0, 0, 0, 0]
 var best_casts: Array = [0, 0, 0, 0, 0]
@@ -233,6 +240,7 @@ func _cancel_aim() -> void:
 		theta = 0.0
 		omega = 0.0
 		trail.clear()
+		_set_feedback("月を引いて、離す。")
 
 func _pause_for_focus_loss() -> void:
 	_cancel_aim()
@@ -293,6 +301,7 @@ func _layout() -> void:
 	pause_rect = Rect2(size.x - 276.0, 20.0, 66.0, 66.0)
 	help_repeat_rect = Rect2(size.x*0.5-126.0,size.y*0.26+420.0,252.0,56.0)
 	help_restart_rect = Rect2(size.x*0.5-126.0,size.y*0.26+490.0,252.0,66.0)
+	resume_rect = Rect2(size.x*0.5-110.0,size.y*0.46+25.0,220.0,58.0)
 
 func _goal_index() -> int:
 	var count: int = CHAPTERS[chapter]["targets"].size()
@@ -380,7 +389,8 @@ func _process(delta: float) -> void:
 			bell_glows[i] = maxf(0.0, bell_glows[i] - delta * 1.1)
 			bell_cooldowns[i] = maxf(0.0, bell_cooldowns[i] - delta)
 		target_pulse = maxf(0.0, target_pulse - delta * 0.55)
-		feedback_timer = maxf(0.0, feedback_timer - delta)
+		if transition_phase==0 and not night_opening:
+			_advance_feedback(delta)
 		for effect in echo_returns:
 			effect["age"] += delta
 		echo_returns = echo_returns.filter(func(effect): return float(effect["age"])<ECHO_SIGNAL_SECONDS)
@@ -539,7 +549,7 @@ func _record_turn_advice(side: int, angle: float, target: float, word: String = 
 		word = "反対側から" if signf(angle)!=signf(target) else ("もう少し大きく" if absf(angle)<absf(target) else "少しやさしく")
 	turn_advice = turn_advice.filter(func(cue): return int(cue["side"])!=side)
 	turn_advice.append({"side":side,"angle":angle,"target":target,"remaining":TURN_ADVICE_SECONDS,"word":word if miss_streak>=2 else ""})
-	feedback_timer = 0.0
+	_fade_feedback()
 
 func _turn_advice_for(side: int) -> Dictionary:
 	for cue in turn_advice:
@@ -607,7 +617,8 @@ func _draw_turn_advice() -> void:
 		var at := _point(float(cue["angle"])) if side<0 else _echo_point(side,float(cue["angle"]))
 		var a := PI*0.5-float(cue["angle"])
 		var b := PI*0.5-float(cue["target"])
-		var alpha := 1.0 if reduced_motion else minf(1.0,float(cue["remaining"])/0.25)
+		var tail := clampf(float(cue["remaining"])/0.60,0.0,1.0)
+		var alpha := tail*tail*(3.0-2.0*tail)
 		draw_arc(at,8.0 if side<0 else 6.0,0.0,TAU,24,Color(WHITE,0.88*alpha),2.0,true)
 		if absf(a-b)>0.01:
 			draw_arc(origin,radius,minf(a,b),maxf(a,b),32,Color(WHITE,0.46*alpha),2.0,true)
@@ -671,11 +682,12 @@ func _draw_echoes() -> void:
 				if _goal_kind_at(index)=="relay" and side!=(0 if float(CHAPTERS[chapter]["targets"][index])<0.0 else 1):continue
 				var target_angle := _echo_target_at(index,side)
 				var beacon := _echo_point(side, target_angle)
-				_glow(beacon, 18.0, _tone_color("gold"), 1.4)
-				draw_arc(beacon, 20.0 if reduced_motion else 20.0 + sin(elapsed * 2.5) * 1.2, 0.0, TAU, 32, _tone_color("gold"), 1.5, true)
+				var reached: bool = cast_goal_hits[index][side]
+				_glow(beacon, 18.0, _tone_color("gold"), 1.25 if reached else 0.45)
+				draw_arc(beacon, 20.0 if reduced_motion else 20.0 + sin(elapsed * 2.5) * 1.2, 0.0, TAU, 32, Color(_tone_color("gold"),1.0 if reached else 0.60), 1.5, true)
 				var tolerance := _goal_tolerance(index)
 				draw_arc(ep,el,PI*0.5-target_angle-tolerance,PI*0.5-target_angle+tolerance,14,Color(0.91,0.80,0.50,0.32),4.0,true)
-				if cast_goal_hits[index][side] and not cast_judged:
+				if reached:
 					draw_circle(beacon,5.0,_tone_color("gold"))
 			if has_last_echo_turn[side] and (not swinging or cast_judged or dragging) and _turn_advice_for(side).is_empty():
 				var previous := _echo_point(side,last_echo_turns[side])
@@ -739,7 +751,7 @@ func _cycle_palette() -> void:
 	palette_from = palette_index
 	palette_index = (palette_index+1)%PALETTES.size()
 	palette_mix = 0.0
-	feedback = ["澄んだ鐘が、水面へひろがる。","柔らかな響きと、あたたかな灯り。","透きとおる響きで、夜が少し白む。"][palette_index]
+	_set_feedback(["澄んだ鐘が、水面へひろがる。","柔らかな響きと、あたたかな灯り。","透きとおる響きで、夜が少し白む。"][palette_index],2.0,0.8)
 	_save()
 	_publish_state()
 
@@ -958,6 +970,13 @@ func _close_cast_when_done() -> void:
 	for e in echoes:
 		if int(e["cast_id"])==casts and int(e["turns"])<2:return
 	cast_judged = true
+	var partial_sides: Array[bool] = [false,false]
+	for index in range(lit_goals.size()):
+		if not lit_goals[index] and _goal_kind_at(index)=="duet":
+			for side in range(2):partial_sides[side] = partial_sides[side] or bool(cast_goal_hits[index][side])
+	if partial_sides.any(func(hit):return hit):
+		var who := "左の月" if partial_sides[0] and not partial_sides[1] else ("右の月" if partial_sides[1] and not partial_sides[0] else "小月")
+		_set_feedback(who+"が届いた。次は左右の対をそろえよう。",2.5,0.9)
 	if cast_awards==0 and turn_advice.is_empty():
 		_record_turn_advice(-1,theta,signf(theta)*0.66,"もう少し大きく")
 	_publish_state()
@@ -976,22 +995,20 @@ func _award_goal(error: float, where: Vector2, index: int = -1) -> void:
 			var a := float(i)*TAU/22.0
 			particles.append({"pos":where,"velocity":Vector2(cos(a),sin(a))*(65.0+float(i%3)*22.0),"life":1.7,"color":_tone_color("gold")})
 	if error<=0.065:perfects += 1
-	feedback = "星が灯った。残る光へ、もうひと振り。"
-	feedback_timer = 3.5
 	target_pulse = 1.0
 	_sound(4,0.72)
 	if progress>=lit_goals.size():
 		chapter_done = true
 		cast_judged = true
 		finish_time = 0.0
-		feedback = COMPLETION_FEEDBACK
-		feedback_timer = COMPLETION_FEEDBACK_HOLD + _completion_feedback_fade_seconds()
+		_set_feedback(COMPLETION_FEEDBACK,COMPLETION_FEEDBACK_HOLD,COMPLETION_FEEDBACK_FADE)
 		var goal: int = CHAPTERS[chapter]["strokes"]
 		var rating := 3 if casts<=goal else (2 if casts<=goal*2 else 1)
 		best_chapters[chapter] = maxi(int(best_chapters[chapter]),rating)
 		if casts>0 and (int(best_casts[chapter])==0 or casts<int(best_casts[chapter])):best_casts[chapter] = casts
 		_play_coda()
 	else:
+		_set_feedback("星が灯った。残る光へ、もうひと振り。",2.5,0.9)
 		night_music.unlock(_music_piece_count(),false,_goal_kind_at(index)=="duet",_music_layer_mask())
 	_save()
 	_layout()
@@ -1031,6 +1048,8 @@ func _judge_echo_turn(side: int, angle: float) -> void:
 			if cast_goal_hits[index][side]:
 				_sound(4,0.5)
 				night_music.reply(casts*lit_goals.size()+index,side)
+				if not cast_goal_hits[index][1-side]:
+					_set_feedback(("左の月" if side==0 else "右の月")+"が届いた。"+("右の月" if side==0 else "左の月")+"も、この一振りで。",2.5,0.9)
 			if cast_goal_hits[index][0] and cast_goal_hits[index][1]:
 				_award_goal(maxf(float(cast_goal_errors[index][0]),float(cast_goal_errors[index][1])),_echo_point(side,target),index)
 	if nearest>=0 and nearest_error>_goal_tolerance(nearest) and cast_awards==0:
@@ -1047,6 +1066,7 @@ func _begin_pull(pos: Vector2) -> void:
 	omega = 0.0
 	trail.clear()
 	_update_pull(pos)
+	_set_feedback("指を離すと、月が揺れる。")
 
 func _set_pull_angle(angle: float) -> void:
 	# All present inputs share a single angle boundary, independent of expression.
@@ -1073,8 +1093,7 @@ func _release() -> void:
 	keyboard_aim = false
 	if absf(theta) < 0.08:
 		theta = 0.0
-		feedback = "左右へ月を引いて、指を離してみよう。"
-		feedback_timer = 3.0
+		_set_feedback("左右へ月を引いて、指を離してみよう。")
 		return
 	casts += 1
 	turn_advice.clear()
@@ -1086,8 +1105,7 @@ func _release() -> void:
 	cast_crossed_center = false
 	cast_judged = false
 	cast_seconds = 0.0
-	feedback = "月が光に届く、その一瞬を聴こう。" if not free_play else "鐘から振り子へ、あなたの音がつながる。"
-	feedback_timer = 3.0
+	_set_feedback("月が光に届く、その一瞬を聴こう。" if not free_play else "鐘から振り子へ、あなたの音がつながる。")
 	if not free_play:
 		night_music.clear_replies()
 		_reset_echoes(true)
@@ -1139,7 +1157,7 @@ func _enter_garden(capture: bool = true) -> void:
 	if garden_scene.has("lights"):
 		garden_lights.assign(garden_scene["lights"])
 		garden_energy = float(garden_scene.get("energy",0.0))
-	feedback = "月を引いて、あなたの夜を奏でよう。"
+	_set_feedback("月を引いて、あなたの夜を奏でよう。")
 	_save()
 	_publish_state()
 
@@ -1170,9 +1188,10 @@ func _return_to_journey(restart: bool = false) -> void:
 		night_intro_seen = true
 	night_music.restore(_music_piece_count(),chapter_done,_music_layer_mask())
 	_layout()
-	feedback = "金の輪で折り返すと、上の星が灯る。" if _goal_kind()=="main" else "鐘の力を、小さな月の光へ届けよう。"
 	if chapter_done:
-		feedback_timer = 0.0
+		_clear_feedback()
+	else:
+		_set_feedback("金の輪で折り返すと、上の星が灯る。" if _goal_kind()=="main" else "鐘の力を、小さな月の光へ届けよう。")
 	_save()
 	_publish_state()
 
@@ -1189,15 +1208,16 @@ func _retry(clear_cadence: bool = true) -> void:
 	_reset_echoes(clear_cadence)
 	if clear_cadence:
 		cadence_notes.clear()
-	feedback = "光の反対側へ引いて、もうひと振り。" if not free_play else "光のない夜を、好きな音で奏でよう。"
-	feedback_timer = 3.0
+	var instruction := "光の反対側へ引いて、もうひと振り。" if not free_play else "光のない夜を、好きな音で奏でよう。"
 	if _goal_kind() == "relay":
-		feedback = "光のある小さな月の側へ、もうひと振り。"
+		instruction = "光のある小さな月の側へ、もうひと振り。"
 	elif _goal_kind() == "duet":
-		feedback = "左でも右でも、二つの月へ。"
+		instruction = "左でも右でも、二つの月へ。"
+	if clear_cadence:_set_feedback(instruction)
 	_publish_state()
 
 func _new_chapter(index: int) -> void:
+	_clear_feedback()
 	_clear_turn_advice()
 	night_opening = false
 	night_opening_time = 0.0
@@ -1226,11 +1246,13 @@ func _new_chapter(index: int) -> void:
 	_retry(false)
 	_layout()
 	if free_play:
-		feedback = "光のない夜を、好きな音で奏でよう。"
+		_set_feedback("光のない夜を、好きな音で奏でよう。")
 	elif _goal_kind() == "relay":
-		feedback = "鐘から小さな月へ、力を届けよう。"
+		_set_feedback("鐘から小さな月へ、力を届けよう。")
 	elif _goal_kind() == "duet":
-		feedback = "左でも右でも、二つの月を光へ。"
+		_set_feedback("左でも右でも、二つの月を光へ。")
+	else:
+		_set_feedback("月を引いて放し、金の輪へ届けよう。")
 
 func _toggle_mute() -> void:
 	muted = not muted
@@ -1245,7 +1267,7 @@ func _input(event: InputEvent) -> void:
 		if event is InputEventKey:
 			interruption = event.keycode in [KEY_M,KEY_P,KEY_ESCAPE,KEY_H]
 		elif event is InputEventMouseButton and event.pressed:
-			interruption = mute_rect.has_point(event.position) or pause_rect.has_point(event.position) or help_rect.has_point(event.position)
+			interruption = mute_rect.has_point(event.position) or pause_rect.has_point(event.position) or help_rect.has_point(event.position) or (paused and resume_rect.has_point(event.position))
 		if not interruption:
 			return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -1268,7 +1290,7 @@ func _input(event: InputEvent) -> void:
 				_publish_state()
 				return
 			if paused:
-				if pause_rect.has_point(pos):
+				if pause_rect.has_point(pos) or resume_rect.has_point(pos):
 					paused = false
 					_publish_state()
 				return
@@ -1494,7 +1516,7 @@ func _draw() -> void:
 	elif started:
 		_draw_score()
 		if retry_rect.size.x>0.0:
-			_action_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"),free_play)
+			_action_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "月を中央へ戻す"),free_play)
 		if next_rect.size.x>0.0:
 			_action_button(next_rect, "夜を変える" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
 	else:
@@ -1511,7 +1533,7 @@ func _draw() -> void:
 	if paused and started and not show_help:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.015, 0.03, 0.04, 0.78))
 		_text("ひと休み", Vector2(size.x * 0.5, size.y * 0.46), 38, _tone_color("gold"), true)
-		_text("P または右上で、夜を再開", Vector2(size.x * 0.5, size.y * 0.46 + 47.0), 21, WHITE, true)
+		_button(resume_rect,"夜を再開する",true)
 		_pause_button()
 
 func _sky_position(index: int) -> Vector2:
@@ -1792,7 +1814,7 @@ func _moon_hint() -> String:
 	if dragging:
 		return "離す"
 	if not swinging and not chapter_done and (not free_play or casts==0):
-		return "← 左へ引いて、離す" if chapter==0 and progress==0 and casts==0 and not free_play else "月を引いて、離す"
+		return "月を引いて、離す"
 	return ""
 
 func _pitch_labels_visible() -> bool:
@@ -1855,10 +1877,6 @@ func _draw_stage() -> void:
 	draw_circle(pivot, 2.0, INK)
 	if dragging:
 		draw_arc(moon, 38.0, 0, TAU, 48, Color(0.64,0.89,0.82,0.4), 1.0, true)
-	var hint := _moon_hint()
-	if not hint.is_empty():
-		var where := moon+Vector2(0,59) if dragging else Vector2(moon.x,minf(moon.y+61.0,size.y-(151.0 if not free_play else 266.0)))
-		_text(hint,where,16 if dragging else 17,WHITE if dragging else MUTED,true)
 	for p in particles:
 		var c: Color = p["color"]
 		c.a = clampf(float(p["life"]), 0.0, 1.0) * 0.8
@@ -1870,15 +1888,66 @@ func _draw_stage() -> void:
 func _completion_feedback_fade_seconds() -> float:
 	return COMPLETION_FEEDBACK_FADE_REDUCED if reduced_motion else COMPLETION_FEEDBACK_FADE
 
+func _feedback_fade_seconds() -> float:
+	return minf(feedback_fade,0.5) if reduced_motion else feedback_fade
+
+func _set_feedback(text: String, hold: float = 3.0, fade: float = 1.0) -> void:
+	var current_alpha := _feedback_alpha()
+	var previous_alpha := _previous_feedback_alpha()
+	if text!=feedback:
+		# Keep only the most visible outgoing line, never an input-driven queue.
+		if current_alpha>=previous_alpha:
+			feedback_previous = feedback
+			feedback_previous_alpha = current_alpha
+		else:
+			feedback_previous_alpha = previous_alpha
+		feedback = text
+		feedback_blend = FEEDBACK_CROSSFADE
+	feedback_hold = hold
+	feedback_fade = fade
+	feedback_timer = hold+_feedback_fade_seconds()
+
+func _clear_feedback() -> void:
+	feedback = ""
+	feedback_timer = 0.0
+	feedback_previous = ""
+	feedback_previous_alpha = 0.0
+	feedback_blend = 0.0
+
+func _fade_feedback() -> void:
+	feedback_timer = minf(feedback_timer,_feedback_fade_seconds())
+
+func _advance_feedback(delta: float) -> void:
+	var blending := minf(delta,feedback_blend)
+	feedback_blend = maxf(0.0,feedback_blend-delta)
+	if feedback_blend<=0.0:
+		feedback_previous = ""
+		feedback_previous_alpha = 0.0
+	feedback_timer = maxf(0.0,feedback_timer-(delta-blending))
+
+func _feedback_blend_alpha() -> float:
+	var t := 1.0-clampf(feedback_blend/FEEDBACK_CROSSFADE,0.0,1.0)
+	return t*t*(3.0-2.0*t)
+
+func _previous_feedback_alpha() -> float:
+	return feedback_previous_alpha*(1.0-_feedback_blend_alpha())
+
 func _feedback_alpha() -> float:
 	if feedback_timer<=0.0:return 0.0
-	if not chapter_done or feedback!=COMPLETION_FEEDBACK:return 1.0
-	var remaining := clampf(feedback_timer/_completion_feedback_fade_seconds(),0.0,1.0)
-	return remaining*remaining*(3.0-2.0*remaining)
+	var remaining := clampf(feedback_timer/_feedback_fade_seconds(),0.0,1.0)
+	return remaining*remaining*(3.0-2.0*remaining)*_feedback_blend_alpha()
+
+func _draw_feedback() -> void:
+	var at := Vector2(size.x*0.5,size.y-108.0)
+	var previous_alpha := _previous_feedback_alpha()
+	if previous_alpha>0.0:_text(feedback_previous,at,16,Color(WHITE,previous_alpha),true)
+	var alpha := _feedback_alpha()
+	if alpha>0.0:_text(feedback,at,16,Color(WHITE,alpha),true)
 
 func _draw_score() -> void:
 	if free_play:
 		_text(PALETTES[palette_index]["name"],Vector2(size.x*0.5,size.y-137.0),18,_tone_color("gold"),true)
+		_draw_feedback()
 		return
 	var line_y := size.y - 140.0
 	_text(CHAPTERS[chapter]["name"],Vector2(28.0,line_y),19,_tone_color("gold"))
@@ -1888,12 +1957,14 @@ func _draw_score() -> void:
 		draw_circle(pos,4.0,_tone_color("gold") if lit_goals[i] else Color("2d4a50"))
 		if not lit_goals[i] and not chapter_done:
 			draw_arc(pos,6.0,0,TAU,24,_tone_color("gold"),0.8,true)
+			if _goal_kind_at(i)=="duet":
+				for side in range(2):
+					var half := pos+Vector2(-2.3 if side==0 else 2.3,0.0)
+					draw_circle(half,1.9,_tone_color("gold") if cast_goal_hits[i][side] else Color("60736d"))
 	var tally := "%d振り" % casts
 	var width := FONT.get_string_size(tally,HORIZONTAL_ALIGNMENT_LEFT,-1,14).x
 	_text(tally,Vector2(size.x-56.0-float(total-1)*18.0-width,line_y),14,MUTED)
-	var feedback_alpha := _feedback_alpha()
-	if feedback_alpha>0.0:
-		_text(feedback,Vector2(size.x*0.5,size.y-108.0),16,Color(WHITE,feedback_alpha),true)
+	_draw_feedback()
 
 func _notify_title_rendered() -> void:
 	JavaScriptBridge.eval("window.moonPendulumTitleReady=true;window.dispatchEvent(new Event('moon-pendulum-title-ready'));")
@@ -1917,10 +1988,11 @@ func _draw_help() -> void:
 	var cx := size.x * 0.5
 	var y := size.y * 0.26
 	_text("月の奏で方", Vector2(cx,y), 34,_tone_color("gold"),true)
-	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "金の輪と、前の折り返しを見比べよう。", "失敗しても音は残る。何度でも奏でよう。", "", "← →：角度を調整　Space：放す", "R：引き直す　M：ミュート　P：一時停止 / 再開"]
+	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "金の輪と、前の折り返しを見比べよう。", "失敗しても音は残る。何度でも奏でよう。", "", "音と休止は、右上のボタンから。", "月に触れて、左右に引いて放そう。"]
 	if not free_play:
-		lines = ["輪は、どれから灯してもいい。","月を持ち上げ、指を離して見守ろう。","月が戻るまで、響きを見守ろう。","一振りで、いくつかの星へ。","小さな月へは、外側の鐘から中央へ。","左右の月は、外の輪から内の輪へ。","手数を超えても、星座は結べる。","引き直しても、放した振りは残る。","← →：角度　Space：放す","R：引き直す　M：音　P：休む"]
+		lines = ["輪は、どれから灯してもいい。","月を持ち上げ、指を離して見守ろう。","月が戻るまで、響きを見守ろう。","一振りで、いくつかの星へ。","小さな月へは、外側の鐘から中央へ。","左右の月は、外の輪から内の輪へ。","手数を超えても、星座は結べる。","月を戻しても、星と手数は残る。","月に触れて、左右に引いて放そう。","音と休止は、右上のボタンから。"]
 		lines[2] = "三振りで、この星座を" if int(CHAPTERS[chapter]["strokes"])==3 else "二振りで、この星座を"
+		if _goal_kind()=="duet":lines[5] = "この一振りで、左右の月を輪へ。"
 	if free_play:
 		lines[0] = "光の輪のない、自由な夜。"
 		lines[1] = "月を引いて放すと、鐘が歌う。"
@@ -1928,8 +2000,8 @@ func _draw_help() -> void:
 		lines[5] = "右下で夜の色と、響きの手触りが変わる。"
 	for i in range(lines.size()):
 		_text(lines[i],Vector2(cx,y+54.0+float(i)*(34.0 if free_play else 32.0)),20 if free_play else 18,WHITE,true)
-	_text("どこかをタップして閉じる / H",Vector2(cx,y+(440.0 if free_play else 390.0)),17,MUTED,true)
-	if not free_play:_button(help_repeat_rect,"この夜を結び直す")
+	_text("タップして閉じる",Vector2(cx,y+(440.0 if free_play else 390.0)),17,MUTED,true)
+	if not free_play:_button(help_repeat_rect,"この夜をやり直す")
 	_button(help_restart_rect,"最初から星を灯す遊び")
 
 func _load_save() -> void:
@@ -2107,7 +2179,8 @@ func _publish_state() -> void:
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
-		state["feedback"] = {"text":feedback,"remaining":feedback_timer,"alpha":_feedback_alpha()}
+		state["feedback"] = {"text":feedback,"remaining":feedback_timer,"alpha":_feedback_alpha(),"previous":{"text":feedback_previous,"alpha":_previous_feedback_alpha()},"crossfade":feedback_blend,"hold":feedback_hold,"fade":_feedback_fade_seconds()}
+		state["goalPairs"] = cast_goal_hits.duplicate(true)
 		state["lit"] = lit_goals.duplicate()
 		state["strokeGoal"] = CHAPTERS[chapter]["strokes"]
 		state["bestCasts"] = best_casts.duplicate()

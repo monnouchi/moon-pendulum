@@ -28,11 +28,11 @@ progress:not([value])::-webkit-progress-value{background:transparent}progress:in
 @media(prefers-reduced-motion:reduce){#loading{transition-duration:.08s}.loading-moon{animation:none}.moon-light{transition:none}}
 noscript{position:absolute;inset:0;padding:20vh 10vw;background:#071b28;color:#e8efea}
 </style>$GODOT_HEAD_INCLUDE</head><body>
-<canvas id="canvas" tabindex="-1" aria-hidden="true" aria-label="月の振り子。マウスまたはタッチで月を左右に引いて放します。キーボードは左右矢印で角度を調整し、Spaceで放します。Rで引き直し、Mでミュート、Pで一時停止と再開、Hで説明。庭ではNで夜の色と音色を変えます。">WebGL 2.0 対応ブラウザで開いてください。</canvas>
+<canvas id="canvas" tabindex="-1" aria-hidden="true" aria-label="月の振り子。マウスまたはタッチで月を左右に引いて放します。音と休止は右上のボタンから、説明は右上の「？」から開けます。">WebGL 2.0 対応ブラウザで開いてください。</canvas>
 <div id="loading" role="region" aria-labelledby="loading-title" aria-busy="true">
 <h1 id="loading-title">月の振り子</h1>
 <p class="loading-subtitle" lang="en">Moon Pendulum</p>
-<svg class="loading-moon" viewBox="0 0 256 256" aria-hidden="true"><defs><mask id="moon-shade"><circle cx="128" cy="159" r="46" fill="white"/><circle cx="145" cy="147" r="39" fill="black"/></mask></defs><path d="M128 35v105" stroke="#79adac" stroke-width="3"/><circle class="moon-light" cx="128" cy="159" r="46" fill="#ecd7a4" mask="url(#moon-shade)"/><circle cx="68" cy="90" r="4" fill="#85d4c9"/><circle cx="187" cy="97" r="4" fill="#85d4c9"/></svg>
+<svg class="loading-moon" viewBox="0 0 256 256" aria-hidden="true"><defs><mask id="moon-shade"><circle cx="128" cy="159" r="46" fill="white"/><circle cx="145" cy="147" r="39" fill="black"/></mask></defs><circle class="moon-light" cx="128" cy="159" r="46" fill="#ecd7a4" mask="url(#moon-shade)"/></svg>
 <p id="message">夜の支度をしています。</p>
 <progress id="progress" aria-label="夜の支度" aria-describedby="message" aria-valuetext="夜の支度をしています。"></progress>
 <button id="retry" hidden>もう一度読み込む</button>

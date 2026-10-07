@@ -408,7 +408,7 @@ func run() -> void:
 	game._new_chapter(0)
 	cast_until_judged(-0.18)
 	check(game.progress==0 and game.miss_streak==1 and game.turn_advice.size()==1,"A measured miss adds one local comparison without earning a star")
-	check(game.turn_advice[0]["word"]=="" and game.feedback_timer==0.0,"A first miss uses the turn mark without another text instruction")
+	check(game.turn_advice[0]["word"]=="" and game.feedback_timer<=game._feedback_fade_seconds(),"A first miss uses the turn mark and lets its previous instruction fade")
 	check(is_equal_approx(game.turn_advice[0]["angle"],game.last_turn) and is_equal_approx(game.turn_advice[0]["target"],game._target()),"The gap compares the actual fold-back with the current target")
 	game._process(1.81)
 	check(game.turn_advice.is_empty(),"The bright comparison expires instead of remaining on screen")
@@ -1067,6 +1067,70 @@ func run() -> void:
 		cast_until_judged(-0.8)
 		check(game.turn_advice.all(func(c):return game._turn_advice_word_rect(c).has_area() and visible.encloses(game._turn_advice_word_rect(c))),"Both missed duet words fit even the narrowest viewport")
 	root.size = original_size
+	# Message opacity is independent of gameplay and has bounded replacement state.
+	game.transition_phase = 0
+	game.night_opening = false
+	game.paused = false
+	game.show_help = false
+	game.muted = true
+	for reduced in [false,true]:
+		game.reduced_motion = reduced
+		for timing in [[3.0,1.0],[2.5,0.9],[2.0,0.8],[3.5,1.5]]:
+			game._clear_feedback()
+			game._set_feedback("月を引いて、離す",timing[0],timing[1])
+			game._advance_feedback(game.FEEDBACK_CROSSFADE)
+			check(game._feedback_alpha()==1.0,"Every message reaches full opacity before its reading time")
+			game._advance_feedback(timing[0])
+			check(is_equal_approx(game._feedback_alpha(),1.0),"The full reading time is preserved")
+			game._advance_feedback(game._feedback_fade_seconds()*0.5)
+			check(is_equal_approx(game._feedback_alpha(),0.5),"Every message fades smoothly, including reduced motion")
+			game._advance_feedback(game._feedback_fade_seconds()*0.5+0.001)
+			check(game._feedback_alpha()==0.0,"Expired messages leave no residual opacity")
+	game._clear_feedback()
+	game._set_feedback("月を引いて、離す")
+	game._advance_feedback(0.3)
+	game._set_feedback("指を離すと、月が揺れる。")
+	check(game._previous_feedback_alpha()==1.0 and game._feedback_alpha()==0.0,"Replacement retains the outgoing line without a blank frame")
+	game._advance_feedback(0.15)
+	check(is_equal_approx(game._previous_feedback_alpha()+game._feedback_alpha(),1.0),"The replacement crossfade keeps the combined opacity")
+	for index in range(50):
+		game._set_feedback("月を引いて、離す" if index%2==0 else "指を離すと、月が揺れる。")
+		game._advance_feedback(0.01)
+	game._advance_feedback(5.0)
+	check(game.feedback_previous=="" and game._feedback_alpha()==0.0,"Rapid input cannot leave a message queue or old alpha")
+	game._set_feedback("月を引いて、離す")
+	var frozen_feedback: float = game.feedback_timer
+	game.paused = true
+	game._process(1.0)
+	check(game.feedback_timer==frozen_feedback,"Pause preserves message reading time")
+	game.paused = false
+	game.show_help = true
+	game._process(1.0)
+	check(game.feedback_timer==frozen_feedback,"Help preserves message reading time")
+	game.show_help = false
+	game._new_chapter(4)
+	check(game.feedback_previous=="","A new night discards inappropriate outgoing copy behind the curtain")
+	cast_until_judged(1.20)
+	check(game.progress==0 and game.cast_goal_hits==[[true,false],[true,false]],"Scorpio's two left marks are partial matches, not completed pairs")
+	check(game.feedback.contains("左の月が届いた"),"A judged partial cast acknowledges its reached side")
+	game._retry()
+	check(game.cast_goal_hits==[[false,false],[false,false]] and game.casts==1,"Returning moons clears attempt marks while retaining spent strokes")
+	var resume_tap := InputEventMouseButton.new()
+	resume_tap.button_index = MOUSE_BUTTON_LEFT
+	resume_tap.pressed = true
+	resume_tap.position = game.resume_rect.get_center()
+	game.paused = true
+	game._input(resume_tap)
+	check(not game.paused,"The labeled pause button resumes by tapping")
+	game._request_transition("chapter",1)
+	game.paused = true
+	game._input(resume_tap)
+	check(not game.paused and game.transition_phase==1,"The labeled resume button also works during a paused curtain")
+	game.transition_phase = 0
+	game.dragging = true
+	game._set_feedback("指を離すと、月が揺れる。")
+	game._cancel_aim()
+	check(not game.dragging and game.feedback=="月を引いて、離す。","Cancelling a held gesture replaces its stale release instruction")
 	print("PASS: %d gameplay checks, all 11 constellation goals / 15 lights across 5 nights" % checks)
 	game.paused = true
 	game._stop_audio(true)
