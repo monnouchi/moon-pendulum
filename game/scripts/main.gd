@@ -10,6 +10,7 @@ const BELL_ANGLES = [-0.96, -0.66, -0.34, 0.0, 0.34, 0.66, 0.96]
 const NOTE_NAMES = ["D3", "A3", "D4", "E4", "F♯4", "B4", "D5"]
 const CHAPTERS = preload("res://scripts/constellation.gd").NIGHTS
 const SKY = preload("res://scripts/sky_figures.gd")
+const SKY_SCENE = preload("res://scripts/sky_scene.gd")
 const PALETTES = [
 	{"name":"蒼の夜", "ink":Color("071b28"), "deep":Color("102c37"), "gold":Color("ecd7a4"), "teal":Color("85d4c9")},
 	{"name":"灯りの夜", "ink":Color("211c26"), "deep":Color("3e2a35"), "gold":Color("f3cf95"), "teal":Color("d6aaa1")},
@@ -79,7 +80,6 @@ var light_flights: Array[Dictionary] = []
 var ripples: Array[Dictionary] = []
 var trail: Array[Vector2] = []
 var crescent_outline := PackedVector2Array()
-var stars: Array[Dictionary] = []
 var players: Array[AudioStreamPlayer] = []
 var audio_base: Array[float] = []
 var audio_gain: Array[float] = []
@@ -150,6 +150,7 @@ var night_opening_time := 0.0
 var night_intro_seen := false
 var sky_points := PackedVector2Array()
 var sky_box := Rect2()
+var sky_fitted: Dictionary = {}
 const NIGHT_VIEW = 3.6
 const NIGHT_PAN = 4.0
 const NIGHT_DISSOLVE = 0.5
@@ -166,10 +167,6 @@ const GRAVITY_NAMES = ["重力 弱", "重力 標準", "重力 強"]
 func _ready() -> void:
 	Engine.max_fps = 60
 	RenderingServer.set_default_clear_color(INK)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 81204
-	for i in range(58):
-		stars.append({"x": rng.randf(), "y": rng.randf(), "r": rng.randf_range(0.7, 1.8), "phase": rng.randf_range(0.0, TAU)})
 	for prefix in ["bell","warm","air"]:
 		var bank: Array[AudioStreamWAV] = []
 		for i in range(7):
@@ -281,7 +278,8 @@ func _layout() -> void:
 	var sky_height := maxf(45.0,minf(300.0 if playing_night else 156.0,pivot.y-sky_top-42.0))
 	# The first sky keeps its larger hero scale before drawing back to the stage.
 	var sky_width := minf(size.x*(0.68 if playing_night else 0.62),470.0 if playing_night else 350.0)
-	sky_points = SKY.fit(chapter,Rect2(size.x*0.5-sky_width*0.5,sky_top,sky_width,sky_height))
+	sky_fitted = SKY_SCENE.fit(chapter,Rect2(size.x*0.5-sky_width*0.5,sky_top,sky_width,sky_height))
+	sky_points = sky_fitted["points"]
 	sky_box = SKY.bounds(Array(sky_points))
 	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
 	help_rect = Rect2(size.x - 202.0, 20.0, 66.0, 66.0)
@@ -1581,33 +1579,40 @@ func _draw_background() -> void:
 		var c := _tone_color("deep").lerp(_tone_color("ink"),float(i)/20.0)
 		c.a = 0.42
 		draw_rect(Rect2(0.0, y, size.x, size.y / 20.0 + 1.0), c)
-	for star in stars:
-		var pos := Vector2(star["x"] * size.x, 90.0 + star["y"] * (size.y * 0.58))
-		if night_opening:
-			pos.y = fposmod(pos.y+(1.0-_night_pan())*size.y*0.62,size.y)
-		var alpha: float = 0.32 if reduced_motion else 0.23 + 0.20 * sin(elapsed * 0.55 + star["phase"])
-		draw_circle(pos, star["r"], Color(0.66, 0.8, 0.79, alpha))
-	draw_set_transform(_ground_camera_offset())
-	var pond_y := pivot.y + length + 71.0
-	# The small footer leaves more water visible beneath the instrument.
-	var horizon := minf(pond_y, size.y - (177.0 if started else 321.0))
-	# Soft nocturnal ridges, reflected rings and reeds frame the instrument.
+	_draw_catalog_sky()
+	var camera := _sky_camera() if started and not free_play else {"offset":Vector2.ZERO,"scale":1.0}
+	draw_set_transform(camera["offset"],0.0,Vector2.ONE*float(camera["scale"]))
+	var ground_alpha := _night_pan()
+	var scene: Dictionary = SKY_SCENE.scene(chapter)
+	var horizon: float = SKY_SCENE.horizon(chapter,sky_fitted)
+	var summer: bool = scene["season"]=="summer"
+	# This distant horizon belongs to the same tangent plane as the stars.
+	# Close shore plants are a separate foreground, not a replacement horizon.
 	for row in range(3):
+		if horizon>size.y+60.0:break
 		var pts := PackedVector2Array([Vector2(-20.0, size.y)])
 		for i in range(27):
 			var x := size.x * float(i) / 26.0
-			var y := horizon - 14.0 + float(row) * 19.0 + sin(float(i) * 0.58 + float(row) * 1.9) * 19.0
+			var y := horizon - 8.0 + float(row)*14.0 + sin(float(i)*0.58+float(row)*1.9+deg_to_rad(float(scene["center_az"])))*12.0
 			pts.append(Vector2(x, y))
 		pts.append(Vector2(size.x + 20.0, size.y))
-		draw_colored_polygon(pts, _tone_color("deep").darkened(0.16+float(row)*0.15))
-	for i in range(10):
-		var y := horizon + 19.0 + float(i) * 14.0
-		var width := 38.0 + float(i) * 15.0
-		draw_line(Vector2(size.x * 0.5 - width, y), Vector2(size.x * 0.5 + width, y), Color(0.31, 0.56, 0.58, 0.07), 1.0)
+		draw_colored_polygon(pts,Color(_tone_color("deep").darkened(0.16+float(row)*0.15),ground_alpha))
+	if (summer or free_play) and horizon<size.y-160.0:
+		draw_rect(Rect2(0.0,horizon+18.0,size.x,size.y-horizon),Color(_tone_color("deep").darkened(0.19),ground_alpha))
+		var clock := 0.0 if reduced_motion else elapsed
+		for i in range(14):
+			var y := horizon+27.0+float(i)*15.0
+			var width := 38.0+float(i)*11.0
+			var center := size.x*0.5+sin(clock*0.17+float(i)*1.7)*4.0
+			draw_line(Vector2(center-width,y),Vector2(center+width,y),Color(0.31,0.56,0.58,0.045*ground_alpha),0.8,true)
+		_draw_moon_reflection(ground_alpha)
+	draw_set_transform(_ground_camera_offset())
+	# Gold, short musical responses belong to the nearby instrument, not the sky Moon.
+	var response_y := minf(pivot.y+length+71.0,size.y-177.0)
 	if free_play:
 		for ring in ripples:
 			var age: float = ring["age"]
-			var center := Vector2(float(ring["pos"].x),horizon+27.0)
+			var center := Vector2(float(ring["pos"].x),response_y+27.0)
 			var width := 12.0+age*28.0
 			var ellipse := PackedVector2Array()
 			for j in range(33):
@@ -1619,7 +1624,7 @@ func _draw_background() -> void:
 		for i in range(7):
 			var level: float = garden_lights[i]
 			if level > 0.10:
-				var pos := Vector2(_sky_position(i).x,horizon+24.0+float(i%3)*12.0)
+				var pos := Vector2(_sky_position(i).x,response_y+24.0+float(i%3)*12.0)
 				_glow(pos,8.0+level*11.0,_tone_color("gold"),level*0.65)
 				for j in range(4):
 					var half := 5.0+float(j)*6.0+level*8.0
@@ -1628,18 +1633,77 @@ func _draw_background() -> void:
 					draw_line(pos+Vector2(-half,float(j)*8.0),pos+Vector2(half,float(j)*8.0),c,1.0,true)
 	elif chapter_done:
 		var bloom := _coda_light()
-		var reflection := Vector2(size.x*0.5,horizon+28.0)
+		var reflection := Vector2(size.x*0.5,response_y+28.0)
 		_glow(reflection,28.0,_tone_color("gold"),bloom*0.45)
 		for j in range(5):
 			var half := 18.0+float(j)*15.0
 			draw_line(reflection+Vector2(-half,float(j)*7.0),reflection+Vector2(half,float(j)*7.0),Color(_tone_color("gold"),bloom*(0.14-float(j)*0.02)),1.0,true)
+	var grass := Color("35534b") if summer else (Color("595047") if scene["season"]=="autumn" else Color("46504f"))
 	for side in [-1.0, 1.0]:
+		var bank := PackedVector2Array()
+		for p in [Vector2(0,size.y),Vector2(0,size.y-259.0),Vector2(size.x*0.10,size.y-220.0),Vector2(size.x*0.23,size.y-181.0),Vector2(size.x*0.30,size.y)]:
+			bank.append(Vector2(p.x if side<0 else size.x-p.x,p.y))
+		draw_colored_polygon(bank,Color(grass.darkened(0.62),0.32))
 		for i in range(7):
 			var x: float = size.x * 0.5 + side * (size.x * 0.40 + float(i) * 7.0)
-			var y := horizon + 38.0
-			var tip := Vector2(x + sin((0.0 if reduced_motion else elapsed * 0.45) + float(i)) * 5.0 + side * 10.0, y - 45.0 - float(i % 3) * 17.0)
-			draw_line(Vector2(x, y), tip, Color("23464b"), 1.2)
-			draw_line(tip - Vector2(0, -13), tip + Vector2(side * 12, 8), Color("315657"), 1.2)
+			var y := size.y-184.0
+			var tip := Vector2(x+sin((0.0 if reduced_motion else elapsed*0.25)+float(i))*3.0+side*10.0,y-45.0-float(i%3)*17.0)
+			draw_line(Vector2(x,y),tip,Color(grass,0.55),1.1,true)
+			draw_line(tip+Vector2(0,13),tip+Vector2(side*12,8),Color(grass,0.65),1.1,true)
+			if summer:draw_line(Vector2(x,y-12.0),tip.lerp(Vector2(x,y),0.6)+Vector2(-side*12,0),Color(grass,0.4),1.0,true)
+	if scene["season"]=="winter":_draw_snow()
+
+func _draw_catalog_sky() -> void:
+	var camera := _sky_camera() if started and not free_play else {"offset":Vector2.ZERO,"scale":1.0}
+	draw_set_transform(camera["offset"],0.0,Vector2.ONE*float(camera["scale"]))
+	var viewport := Rect2(Vector2(-4,-4),size+Vector2(8,8))
+	for star in SKY_SCENE.scene(chapter)["neighbors"]:
+		var pos := SKY_SCENE.point(star,sky_fitted)
+		if not viewport.has_point(pos*float(camera["scale"])+camera["offset"]):continue
+		var brightness := pow(10.0,-0.22*(float(star[3])+1.5))
+		draw_circle(pos,0.65+brightness*0.9,Color(0.76,0.85,0.88,0.09+brightness*0.25))
+	_draw_sky_moon()
+
+func _draw_sky_moon() -> void:
+	if not SKY_SCENE.moon_visible(chapter):return
+	var moon: Dictionary = SKY_SCENE.scene(chapter)["moon"]
+	var pos := SKY_SCENE.moon_point(chapter,sky_fitted)
+	var radius := float(moon["radius"])*float(sky_fitted["scale"])/float(moon["front"])
+	_glow(pos,radius*1.8,Color("cfdeea"),float(moon["illum"])*0.18)
+	draw_circle(pos,radius,Color(0.6,0.72,0.8,0.06))
+	var lit := PackedVector2Array()
+	var direction: Array = moon["light"]
+	var rotation := atan2(float(direction[1]),float(direction[0]))
+	for i in range(25):
+		var a := -PI*0.5+PI*float(i)/24.0
+		lit.append(pos+Vector2(cos(a),sin(a)).rotated(rotation)*radius)
+	for i in range(25):
+		var y := 1.0-2.0*float(i)/24.0
+		var x := -(2.0*float(moon["illum"])-1.0)*sqrt(maxf(0.0,1.0-y*y))
+		lit.append(pos+Vector2(x,y).rotated(rotation)*radius)
+	draw_colored_polygon(lit,Color(0.89,0.94,0.98,0.83))
+
+func _draw_moon_reflection(visibility: float) -> void:
+	var clock := 0.0 if reduced_motion else elapsed
+	for glint in SKY_SCENE.reflection(chapter,sky_fitted,size.y-160.0):
+		var pos: Vector2 = glint["pos"]
+		var row: int = glint["row"]
+		var phase := clock*0.26+float(row)*1.87
+		var strength := float(glint["strength"])*(0.22+0.78*pow(maxf(0.0,sin(phase)),2.0))
+		var width := 4.0+float(row)*0.75
+		pos.x += sin(phase*0.73)*3.0
+		var color := Color(0.82,0.89,0.96,strength*0.19*visibility)
+		draw_line(pos-Vector2(width,0),pos+Vector2(width*0.35,0),color,1.0,true)
+		draw_line(pos+Vector2(width*0.6,2.0),pos+Vector2(width*1.1,2.0),Color(color,color.a*0.55),0.8,true)
+
+func _draw_snow() -> void:
+	var top := size.y*0.68
+	var height := maxf(20.0,size.y-177.0-top)
+	var clock := 0.0 if reduced_motion else elapsed
+	for i in range(12):
+		var x := size.x*fposmod(float(i)*0.381966,1.0)+sin(clock*0.12+float(i))*4.0
+		var y := top+fposmod(float(i)*19.7+clock*5.0,height)
+		draw_circle(Vector2(x,y),0.75+float(i%3)*0.2,Color(0.82,0.9,0.93,0.18))
 
 func _draw_header() -> void:
 	if not started:
@@ -1940,6 +2004,28 @@ func _save() -> void:
 		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters,"bestCasts":best_casts,"listening":listening_resume}
 		JavaScriptBridge.eval("(function(){try{window.localStorage.setItem("+JSON.stringify(WEB_SAVE_KEY)+","+JSON.stringify(JSON.stringify(checkpoint))+");}catch(e){}})()")
 
+func _sky_scene_state(camera: Dictionary) -> Dictionary:
+	var scene: Dictionary = SKY_SCENE.scene(chapter)
+	var catalog: Array = []
+	var visible := Rect2(Vector2.ZERO,size)
+	for row in scene["neighbors"]:
+		var pos: Vector2 = SKY_SCENE.point(row,sky_fitted)*float(camera["scale"])+camera["offset"]
+		if visible.has_point(pos):
+			catalog.append({"hr":int(row[0]),"pos":[pos.x,pos.y],"mag":row[3],"az":row[4],"alt":row[5]})
+		if catalog.size()>=12:break
+	var targets: Array = []
+	for i in range(sky_points.size()):
+		var pos: Vector2 = sky_points[i]*float(camera["scale"])+camera["offset"]
+		var row: Array = scene["targets"][i]
+		targets.append({"hr":int(row[0]),"pos":[pos.x,pos.y],"az":row[4],"alt":row[5]})
+	var moon: Dictionary = scene["moon"]
+	var moon_pos: Vector2 = SKY_SCENE.moon_point(chapter,sky_fitted)*float(camera["scale"])+camera["offset"]
+	var reflection: Array = []
+	for glint in SKY_SCENE.reflection(chapter,sky_fitted,size.y-160.0):
+		var pos: Vector2 = glint["pos"]*float(camera["scale"])+camera["offset"]
+		if visible.has_point(pos):reflection.append([pos.x,pos.y,glint["strength"]])
+	return {"observer":SKY_SCENE.DATA.OBSERVER,"local":scene["local"],"season":scene["season"],"az":scene["center_az"],"alt":scene["center_alt"],"sunAlt":scene["sun_alt"],"horizon":SKY_SCENE.horizon(chapter,sky_fitted)*float(camera["scale"])+camera["offset"].y,"projectionScale":float(sky_fitted["scale"])*float(camera["scale"]),"targets":targets,"catalog":catalog,"skyMoon":{"az":moon["az"],"alt":moon["alt"],"illum":moon["illum"],"pos":[moon_pos.x,moon_pos.y],"aboveHorizon":float(moon["alt"])>0.0,"inFrame":SKY_SCENE.moon_visible(chapter) and visible.has_point(moon_pos)},"reflection":reflection,"snow":12 if scene["season"]=="winter" else 0,"decorativeClock":0.0 if reduced_motion else elapsed}
+
 func _publish_state() -> void:
 	# A read-only public QA snapshot. It cannot alter gameplay or storage.
 	if OS.has_feature("web"):
@@ -1953,6 +2039,7 @@ func _publish_state() -> void:
 		state["echoTurns"] = [echoes[0]["turns"],echoes[1]["turns"]]
 		state["journeyEntry"] = _journey_entry_label()
 		var camera := _sky_camera()
+		state["skyScene"] = _sky_scene_state(camera)
 		state["opening"] = {"active":night_opening,"seen":night_intro_seen,"time":night_opening_time,"pan":_night_pan(),"nameAlpha":_night_name_alpha() if night_opening else 0.0,"scale":camera["scale"],"offset":[camera["offset"].x,camera["offset"].y],"groundOffset":_ground_camera_offset().y,"name":CHAPTERS[chapter]["name"],"stars":sky_points.size(),"missing":SKY.FIGURES[chapter]["goals"],"bounds":[sky_box.position.x,sky_box.position.y,sky_box.size.x,sky_box.size.y]}
 		var moon_angle := theta if started else _intro_angle()
 		var mass := _point(moon_angle)

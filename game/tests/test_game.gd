@@ -987,21 +987,27 @@ func run() -> void:
 	for night in range(5):
 		game._new_chapter(night)
 		var figure: Dictionary = game.SKY.FIGURES[night]
-		total_major_stars += figure["points"].size()
+		var observed: Dictionary = game.SKY_SCENE.scene(night)
+		check(observed["targets"].map(func(star):return int(star[0]))==figure["hr"],"Catalog targets preserve all original gameplay identities and order")
+		check(observed["targets"].all(func(star):return float(star[5])>5.0),"Every target is above the physical horizon at its fixed observation time")
+		check(float(observed["sun_alt"]) < -18.0,"Every frozen scene is after astronomical twilight")
+		check(observed["neighbors"].all(func(star):return float(star[5])>0.0 and float(star[3])<=5.0),"Background stars have catalog brightness and are above the same horizon")
+		total_major_stars += figure["hr"].size()
 		var assigned: Array = []
 		for goal in range(figure["goals"].size()):
 			var group: Array = figure["goals"][goal]
 			check(group.size()==(2 if game._goal_kind_at(goal)=="duet" else 1),"A real constellation preserves the existing goal-to-score-layer count")
 			for index in group:
-				check(index>=0 and index<figure["points"].size() and index not in assigned,"Each missing star belongs to exactly one reachable goal")
+				check(index>=0 and index<figure["hr"].size() and index not in assigned,"Each missing star belongs to exactly one reachable goal")
 				assigned.append(index)
 				total_missing_stars += 1
-		check(figure["points"].size()>assigned.size(),"Every incomplete constellation already contains quiet major stars")
+		check(figure["hr"].size()>assigned.size(),"Every incomplete constellation already contains quiet major stars")
 		var name_font_ok := true
 		for character in game.CHAPTERS[night]["name"]:
 			name_font_ok = name_font_ok and game.FONT.has_char(character.unicode_at(0))
 		check(name_font_ok,"All five real constellation names use available bundled font glyphs")
 	check(total_major_stars==39 and total_missing_stars==15,"Five richer skies retain 11 tasks and exactly 15 musical lights")
+	check(game.SKY_SCENE.DATA.OBSERVER["latitude"]==35.0 and game.SKY_SCENE.DATA.OBSERVER["longitude"]==135.0,"The artwork has one fixed Japanese reference site, independent of user location")
 	var original_size := root.size
 	for resolution in [Vector2i(390,844), Vector2i(320,568), Vector2i(1200,863)]:
 		root.size = resolution
@@ -1026,7 +1032,20 @@ func run() -> void:
 			var camera: Dictionary = game._sky_camera()
 			var hero := Rect2(game.sky_box.position*float(camera["scale"])+camera["offset"],game.sky_box.size*float(camera["scale"]))
 			check(visible.encloses(hero) and hero.size.y>=game.sky_box.size.y,"The introduction fits a larger uniformly scaled constellation with whitespace")
+			var initial: Dictionary = game._sky_scene_state(camera)
+			game.night_opening_time = 5.5
+			var during: Dictionary = game._sky_scene_state(game._sky_camera())
+			var first_a: Array = initial["targets"][0]["pos"]
+			var first_b: Array = initial["targets"][-1]["pos"]
+			var later_a: Array = during["targets"][0]["pos"]
+			var later_b: Array = during["targets"][-1]["pos"]
+			var first_distance := Vector2(first_a[0]-first_b[0],first_a[1]-first_b[1]).length()/float(initial["projectionScale"])
+			var later_distance := Vector2(later_a[0]-later_b[0],later_a[1]-later_b[1]).length()/float(during["projectionScale"])
+			check(absf(first_distance-later_distance)<0.00001,"The celestial projection remains rigid throughout the downward pan")
 			game.night_opening = false
+			var ground: Dictionary = game._sky_scene_state(game._sky_camera())
+			check(ground["reflection"].is_empty() if night!=4 else not ground["reflection"].is_empty(),"Moonlight appears only on the summer water with an above-horizon Moon")
+			check(ground["skyMoon"]["inFrame"] if night==4 else not ground["skyMoon"]["inFrame"],"The actual sky Moon occupies only its computed visible field")
 		check([-game.MAX_PULL,0.0,game.MAX_PULL].all(func(angle):return game.stage_rect.has_point(game._point(angle))),"The compact footer preserves touch access at rest and both full pull angles")
 		for direction in [-1.0,1.0]:
 			game._new_chapter(1)
