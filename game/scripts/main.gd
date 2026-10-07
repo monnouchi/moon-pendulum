@@ -36,6 +36,10 @@ const INTRO_SWAY = 0.055
 const INTRO_PERIOD = 6.0
 const INTRO_HIT_RADIUS = 60.0
 const INTRO_SETTLE = 0.35
+const COMPLETION_FEEDBACK = "星座が灯った。夜に、旋律が残った。"
+const COMPLETION_FEEDBACK_HOLD = 3.5
+const COMPLETION_FEEDBACK_FADE = 1.5
+const COMPLETION_FEEDBACK_FADE_REDUCED = 0.5
 
 var size := Vector2.ZERO
 var pivot := Vector2.ZERO
@@ -919,7 +923,8 @@ func _award_goal(error: float, where: Vector2, index: int = -1) -> void:
 		chapter_done = true
 		cast_judged = true
 		finish_time = 0.0
-		feedback = "星座が灯った。夜に、旋律が残った。"
+		feedback = COMPLETION_FEEDBACK
+		feedback_timer = COMPLETION_FEEDBACK_HOLD + _completion_feedback_fade_seconds()
 		var goal: int = CHAPTERS[chapter]["strokes"]
 		var rating := 3 if casts<=goal else (2 if casts<=goal*2 else 1)
 		best_chapters[chapter] = maxi(int(best_chapters[chapter]),rating)
@@ -1801,6 +1806,15 @@ func _draw_stage() -> void:
 		var glow := _coda_light()*minf(1.0,finish_time*1.8)
 		_glow(Vector2(pivot.x, pivot.y + 80), 75, _tone_color("gold"), glow * 2.0)
 
+func _completion_feedback_fade_seconds() -> float:
+	return COMPLETION_FEEDBACK_FADE_REDUCED if reduced_motion else COMPLETION_FEEDBACK_FADE
+
+func _feedback_alpha() -> float:
+	if feedback_timer<=0.0:return 0.0
+	if not chapter_done or feedback!=COMPLETION_FEEDBACK:return 1.0
+	var remaining := clampf(feedback_timer/_completion_feedback_fade_seconds(),0.0,1.0)
+	return remaining*remaining*(3.0-2.0*remaining)
+
 func _draw_score() -> void:
 	if free_play:
 		_text(PALETTES[palette_index]["name"],Vector2(size.x*0.5,size.y-137.0),18,_tone_color("gold"),true)
@@ -1816,8 +1830,9 @@ func _draw_score() -> void:
 	var tally := "%d振り" % casts
 	var width := FONT.get_string_size(tally,HORIZONTAL_ALIGNMENT_LEFT,-1,14).x
 	_text(tally,Vector2(size.x-56.0-float(total-1)*18.0-width,line_y),14,MUTED)
-	if feedback_timer>0.0:
-		_text(feedback,Vector2(size.x*0.5,size.y-108.0),16,WHITE,true)
+	var feedback_alpha := _feedback_alpha()
+	if feedback_alpha>0.0:
+		_text(feedback,Vector2(size.x*0.5,size.y-108.0),16,Color(WHITE,feedback_alpha),true)
 
 func _notify_title_rendered() -> void:
 	JavaScriptBridge.eval("window.moonPendulumTitleReady=true;window.dispatchEvent(new Event('moon-pendulum-title-ready'));")
@@ -2031,6 +2046,7 @@ func _publish_state() -> void:
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
+		state["feedback"] = {"text":feedback,"remaining":feedback_timer,"alpha":_feedback_alpha()}
 		state["lit"] = lit_goals.duplicate()
 		state["strokeGoal"] = CHAPTERS[chapter]["strokes"]
 		state["bestCasts"] = best_casts.duplicate()
