@@ -1019,12 +1019,15 @@ func run() -> void:
 		for night in range(5):
 			game._new_chapter(night)
 			check(visible.encloses(game.sky_box),"Every major-star figure fits the final sky on wide and narrow screens")
+			check(game.sky_box.end.y<=game.pivot.y-34.0,"The larger sky leaves clear space above the instrument crossbar")
+			check(not game.sky_box.intersects(game.reset_rect),"The expanded star figure never covers the garden control")
 			game.night_opening = true
 			game.night_opening_time = 2.0
 			var camera: Dictionary = game._sky_camera()
 			var hero := Rect2(game.sky_box.position*float(camera["scale"])+camera["offset"],game.sky_box.size*float(camera["scale"]))
 			check(visible.encloses(hero) and hero.size.y>=game.sky_box.size.y,"The introduction fits a larger uniformly scaled constellation with whitespace")
 			game.night_opening = false
+		check([-game.MAX_PULL,0.0,game.MAX_PULL].all(func(angle):return game.stage_rect.has_point(game._point(angle))),"The compact footer preserves touch access at rest and both full pull angles")
 		for direction in [-1.0,1.0]:
 			game._new_chapter(1)
 			cast_until_judged(direction*0.5)

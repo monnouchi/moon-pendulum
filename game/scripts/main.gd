@@ -251,14 +251,17 @@ func _exit_tree() -> void:
 func _layout() -> void:
 	size = get_viewport_rect().size
 	var portrait := size.y > size.x * 1.20
+	var playing_night := started and not free_play
 	length = minf(size.x * 0.43, (size.y - 325.0) * 0.72)
 	pivot = Vector2(size.x * 0.5, 139.0)
 	if portrait:
 		var stage_top := 142.0
-		var stage_bottom := size.y - 263.0
+		var stage_bottom := size.y - (145.0 if playing_night else 263.0)
 		var spare := maxf(0.0, stage_bottom - stage_top - length - 102.0)
 		pivot.y = stage_top + spare * 0.60 + 32.0
-	stage_rect = Rect2(24.0, 112.0, size.x - 48.0, size.y - 369.0)
+	elif playing_night:
+		pivot.y = maxf(pivot.y,size.y-length-205.0)
+	stage_rect = Rect2(24.0, 112.0, size.x - 48.0, size.y - (277.0 if playing_night else 369.0))
 	var bottom_y := size.y - 86.0
 	var bw := minf(220.0,(size.x-80.0)/2.0)
 	retry_rect = Rect2(size.x * 0.5 - bw - 8.0, bottom_y - 20.0, bw, 72.0)
@@ -275,8 +278,10 @@ func _layout() -> void:
 			next_rect = Rect2()
 	var portrait_sky := size.y > size.x*1.20
 	var sky_top := 145.0 if portrait_sky else 24.0
-	var sky_height := maxf(45.0,minf(156.0,pivot.y-sky_top-42.0))
-	sky_points = SKY.fit(chapter,Rect2(size.x*0.5-minf(size.x*0.62,350.0)*0.5,sky_top,minf(size.x*0.62,350.0),sky_height))
+	var sky_height := maxf(45.0,minf(300.0 if playing_night else 156.0,pivot.y-sky_top-42.0))
+	# The first sky keeps its larger hero scale before drawing back to the stage.
+	var sky_width := minf(size.x*(0.68 if playing_night else 0.62),470.0 if playing_night else 350.0)
+	sky_points = SKY.fit(chapter,Rect2(size.x*0.5-sky_width*0.5,sky_top,sky_width,sky_height))
 	sky_box = SKY.bounds(Array(sky_points))
 	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
 	help_rect = Rect2(size.x - 202.0, 20.0, 66.0, 66.0)
@@ -1344,6 +1349,16 @@ func _pause_button() -> void:
 		draw_rect(Rect2(center+Vector2(-11,-12),Vector2(7,24)),WHITE)
 		draw_rect(Rect2(center+Vector2(4,-12),Vector2(7,24)),WHITE)
 
+func _action_button(rect: Rect2, label: String, primary: bool = false) -> void:
+	# Keep the original full touch area around a quieter, smaller visible action.
+	var visible := Rect2(rect.position+Vector2(8.0,18.0),rect.size-Vector2(16.0,36.0))
+	var fill := Color(_tone_color("teal"),0.16 if primary else 0.05)
+	_panel(visible,fill,Color(_tone_color("teal"),0.34 if primary else 0.17),8.0)
+	var font_size := 17
+	while font_size>14 and FONT.get_string_size(label,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x>visible.size.x-16.0:
+		font_size -= 1
+	_text(label,visible.get_center()+Vector2(0.0,float(font_size)*0.34),font_size,WHITE if primary else MUTED,true)
+
 func _crescent_shape() -> PackedVector2Array:
 	if crescent_outline.is_empty():
 		# Trace the outer exposed arc, then the inner arc between intersections.
@@ -1415,9 +1430,9 @@ func _draw() -> void:
 	elif started:
 		_draw_score()
 		if retry_rect.size.x>0.0:
-			_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"))
+			_action_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "引き直す  R"),free_play)
 		if next_rect.size.x>0.0:
-			_button(next_rect, "夜を変える" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
+			_action_button(next_rect, "夜を変える" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
 	else:
 		_draw_intro()
 	if transition_phase!=0:
@@ -1574,8 +1589,8 @@ func _draw_background() -> void:
 		draw_circle(pos, star["r"], Color(0.66, 0.8, 0.79, alpha))
 	draw_set_transform(_ground_camera_offset())
 	var pond_y := pivot.y + length + 71.0
-	# Keep the resonant water visible above the score, including wide windows.
-	var horizon := minf(pond_y, size.y - 321.0)
+	# The small footer leaves more water visible beneath the instrument.
+	var horizon := minf(pond_y, size.y - (177.0 if started else 321.0))
 	# Soft nocturnal ridges, reflected rings and reeds frame the instrument.
 	for row in range(3):
 		var pts := PackedVector2Array([Vector2(-20.0, size.y)])
@@ -1712,7 +1727,7 @@ func _draw_stage() -> void:
 		draw_arc(moon, 38.0, 0, TAU, 48, Color(0.64,0.89,0.82,0.4), 1.0, true)
 	var hint := _moon_hint()
 	if not hint.is_empty():
-		var where := moon+Vector2(0,59) if dragging else Vector2(moon.x,minf(moon.y+61.0,size.y-266.0))
+		var where := moon+Vector2(0,59) if dragging else Vector2(moon.x,minf(moon.y+61.0,size.y-(151.0 if not free_play else 266.0)))
 		_text(hint,where,16 if dragging else 17,WHITE if dragging else MUTED,true)
 	for p in particles:
 		var c: Color = p["color"]
@@ -1726,24 +1741,19 @@ func _draw_score() -> void:
 	if free_play:
 		_text(PALETTES[palette_index]["name"],Vector2(size.x*0.5,size.y-137.0),18,_tone_color("gold"),true)
 		return
-	var card_y := size.y - 245.0
-	var card := Rect2(28.0, card_y, size.x - 56.0, 137.0)
-	_panel(card,Color(_tone_color("ink").lightened(0.025),0.90),_tone_color("teal").darkened(0.62),16.0)
-	_text(PALETTES[palette_index]["name"] if free_play else CHAPTERS[chapter]["name"], Vector2(49.0, card_y + 34.0), 23, _tone_color("gold"))
-	var total: int = 0 if free_play else CHAPTERS[chapter]["targets"].size()
+	var line_y := size.y - 140.0
+	_text(CHAPTERS[chapter]["name"],Vector2(28.0,line_y),19,_tone_color("gold"))
+	var total: int = CHAPTERS[chapter]["targets"].size()
 	for i in range(total):
-		var pos := Vector2(size.x - 57.0 - float(total - 1 - i) * 26.0, card_y + 27.0)
-		draw_circle(pos,6.0,_tone_color("gold") if lit_goals[i] else Color("2d4a50"))
+		var pos := Vector2(size.x - 34.0 - float(total - 1 - i) * 18.0, line_y - 6.0)
+		draw_circle(pos,4.0,_tone_color("gold") if lit_goals[i] else Color("2d4a50"))
 		if not lit_goals[i] and not chapter_done:
-			draw_arc(pos, 9.0, 0, TAU, 24, _tone_color("gold"), 1.0, true)
-	var goal_text := "三振りで、この星座を" if int(CHAPTERS[chapter]["strokes"])==3 else "二振りで、この星座を"
+			draw_arc(pos,6.0,0,TAU,24,_tone_color("gold"),0.8,true)
 	var tally := "%d振り" % casts
-	_text(tally if chapter_done else goal_text,Vector2(49,card_y+66),17,MUTED)
-	if not chapter_done:
-		var width := FONT.get_string_size(tally,HORIZONTAL_ALIGNMENT_LEFT,-1,17).x
-		_text(tally,Vector2(size.x-49-width,card_y+66),17,MUTED)
+	var width := FONT.get_string_size(tally,HORIZONTAL_ALIGNMENT_LEFT,-1,14).x
+	_text(tally,Vector2(size.x-56.0-float(total-1)*18.0-width,line_y),14,MUTED)
 	if feedback_timer>0.0:
-		_text(feedback,Vector2(size.x*0.5,card_y+105),17,WHITE,true)
+		_text(feedback,Vector2(size.x*0.5,size.y-108.0),16,WHITE,true)
 
 func _notify_title_rendered() -> void:
 	JavaScriptBridge.eval("window.moonPendulumTitleReady=true;window.dispatchEvent(new Event('moon-pendulum-title-ready'));")
@@ -1770,6 +1780,7 @@ func _draw_help() -> void:
 	var lines := ["1. 光の輪と反対側へ、月を引く。", "2. 指を離すと、月が反対側へ揺れる。", "3. 光の近くで折り返すと、光がつながる。", "", "小さく引けば近くへ、大きく引けば遠くへ。", "金の輪と、前の折り返しを見比べよう。", "失敗しても音は残る。何度でも奏でよう。", "", "← →：角度を調整　Space：放す", "R：引き直す　M：ミュート　P：一時停止 / 再開"]
 	if not free_play:
 		lines = ["輪は、どれから灯してもいい。","月を持ち上げ、指を離して見守ろう。","月が戻るまで、響きを見守ろう。","一振りで、いくつかの星へ。","小さな月へは、外側の鐘から中央へ。","左右の月は、外の輪から内の輪へ。","手数を超えても、星座は結べる。","引き直しても、放した振りは残る。","← →：角度　Space：放す","R：引き直す　M：音　P：休む"]
+		lines[2] = "三振りで、この星座を" if int(CHAPTERS[chapter]["strokes"])==3 else "二振りで、この星座を"
 	if free_play:
 		lines[0] = "光の輪のない、自由な夜。"
 		lines[1] = "月を引いて放すと、鐘が歌う。"
@@ -1942,12 +1953,12 @@ func _publish_state() -> void:
 		state["echoTurns"] = [echoes[0]["turns"],echoes[1]["turns"]]
 		state["journeyEntry"] = _journey_entry_label()
 		var camera := _sky_camera()
-		state["opening"] = {"active":night_opening,"seen":night_intro_seen,"time":night_opening_time,"pan":_night_pan(),"nameAlpha":_night_name_alpha() if night_opening else 0.0,"scale":camera["scale"],"offset":[camera["offset"].x,camera["offset"].y],"groundOffset":_ground_camera_offset().y,"name":CHAPTERS[chapter]["name"],"stars":sky_points.size(),"missing":SKY.FIGURES[chapter]["goals"]}
+		state["opening"] = {"active":night_opening,"seen":night_intro_seen,"time":night_opening_time,"pan":_night_pan(),"nameAlpha":_night_name_alpha() if night_opening else 0.0,"scale":camera["scale"],"offset":[camera["offset"].x,camera["offset"].y],"groundOffset":_ground_camera_offset().y,"name":CHAPTERS[chapter]["name"],"stars":sky_points.size(),"missing":SKY.FIGURES[chapter]["goals"],"bounds":[sky_box.position.x,sky_box.position.y,sky_box.size.x,sky_box.size.y]}
 		var moon_angle := theta if started else _intro_angle()
 		var mass := _point(moon_angle)
 		var origin := _moon_origin(mass,moon_angle,_moon_radius())
 		state["canvasSize"] = [size.x,size.y]
-		state["moon"] = {"angle":moon_angle,"mass":[mass.x,mass.y],"origin":[origin.x,origin.y],"radius":_moon_radius(),"hitRadius":INTRO_HIT_RADIUS if not started else 0.0}
+		state["moon"] = {"angle":moon_angle,"mass":[mass.x,mass.y],"origin":[origin.x,origin.y],"radius":_moon_radius(),"hitRadius":INTRO_HIT_RADIUS if not started else 0.0,"anchor":[pivot.x,pivot.y],"length":length}
 		var cues: Array = []
 		for cue in turn_advice:
 			var word_rect := _turn_advice_word_rect(cue)
