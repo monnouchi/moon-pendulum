@@ -780,7 +780,7 @@ func run() -> void:
 	game.listening_resume = {"chapter":4,"casts":2,"perfects":2}
 	game._return_to_journey()
 	check(game.chapter==4 and game.chapter_done and game.progress==2 and game.night_music.pieces==4,"Direct restoration retains the completed final night for listening")
-	check(game._journey_entry_label()=="完成した曲を聴く","The garden's completed-score entrance describes listening instead of a playable stage")
+	check(game._journey_entry_label()=="完成した夜の伴奏と遊ぶ","The completed-night entrance describes playing with the finished accompaniment")
 	game._request_transition("garden")
 	check(game.listening_resume.is_empty() and game.transition_resume["chapter"]==0,"Explicit final exit clears listening before a refresh can interrupt the curtain")
 	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
@@ -803,7 +803,7 @@ func run() -> void:
 	game._new_chapter(0)
 	game.started = false
 	game._start()
-	check(game.free_play and game.listening_resume["chapter"]==4 and game._journey_entry_label()=="完成した曲を聴く","Title entry preserves a legacy final-listening save inside the garden")
+	check(game.free_play and game.listening_resume["chapter"]==4 and game._journey_entry_label()=="完成した夜の伴奏と遊ぶ","Title entry preserves a legacy final-listening save inside the garden")
 	game._return_to_journey()
 	check(game.chapter==4 and game.chapter_done and game.night_music.pieces==4 and game.night_music.completion_starts==0,"The garden restores the legacy final score without a repeated reward")
 	game._enter_garden()
@@ -1172,12 +1172,30 @@ func run() -> void:
 	game._process(0.02)
 	var collection_clock: float = game.night_music.time
 	var collection_theta: float = game.theta
-	game.show_collection = true
-	game._stop_audio()
+	game._sound(2,0.8)
+	var collection_bell: int = (game.voice-1)%game.BELL_VOICES
+	var collection_gain: float = game.audio_gain[collection_bell]
+	game._open_collection()
+	check(game.collection_opacity==0.0 and game._collection_blocking(),"Opening the collection blocks gestures immediately without an instant visual curtain")
+	resume_tap.position = game.collection_rows[1].get_center()
+	game._input(resume_tap)
+	check(game.show_collection and game.garden_night==2 and game.transition_phase==0,"A collection row cannot be chosen while the surface is still invisible")
+	resume_tap.position = game.collection_close_rect.get_center()
+	game._input(resume_tap)
+	check(game.show_collection,"A rapid second tap cannot cut away the invisible opening surface")
 	game._process(0.10)
 	game._physics_process(0.10)
-	check(game.night_music.time==collection_clock and game.theta==collection_theta and game.night_music.snapshot()["audibleVoices"]==0,"The choice surface freezes both music and motion and silences the old voices")
-	game.show_collection = false
+	check(game.night_music.time>collection_clock and game.theta==collection_theta and game.night_music.snapshot()["audibleVoices"]>0,"The choice surface holds motion while its accompaniment continues softly")
+	check(game.players[collection_bell].playing and game.audio_gain[collection_bell]==collection_gain,"Opening the collection preserves the ringing bell's natural tail")
+	check(game._collection_alpha()>0.0 and game._collection_alpha()<1.0 and game._collection_audio_gain()>game.COLLECTION_MUSIC_GAIN,"The choice surface and music gain fade through intermediate levels")
+	advance_for(0.55)
+	check(game._collection_alpha()==1.0 and is_equal_approx(game._collection_audio_gain(),game.COLLECTION_MUSIC_GAIN),"The open collection retains a quiet accompaniment instead of silence")
+	game._input(resume_tap)
+	check(game._collection_blocking() and game._collection_alpha()==1.0,"Closing retains the modal until its fade completes")
+	advance_for(0.20)
+	check(game._collection_alpha()>0.0 and game._collection_alpha()<1.0 and game._collection_audio_gain()>game.COLLECTION_MUSIC_GAIN,"Closing restores the scene and score gradually")
+	advance_for(0.40)
+	check(not game._collection_blocking() and game._collection_audio_gain()==1.0,"The scene becomes playable after the collection closes gently")
 	game.muted = true
 	game.best_chapters.assign([3,3,3,3,3])
 	game._layout()
@@ -1204,7 +1222,10 @@ func run() -> void:
 	game._return_to_journey()
 	var listening_casts: int = game.casts
 	game._begin_pull(game._point(0.0))
-	check(not game.dragging and game.casts==listening_casts and game.feedback.contains("完成した曲を聴いて"),"Touching a completed listening moon acknowledges the action without rewriting completion")
+	check(game.dragging and game.casts==listening_casts,"A restored completed moon accepts a new expressive pull")
+	game._set_pull_angle(0.9)
+	game._release()
+	check(game.swinging and game.cast_judged and game.casts==listening_casts and game.chapter_done,"A completed-night release plays motion without adding a scored stroke")
 	game._enter_garden(false)
 	game.show_collection = true
 	var held_collection_night: int = game.garden_night
@@ -1216,6 +1237,185 @@ func run() -> void:
 			var ridge: PackedVector2Array = game._horizon_polygon(game.size.y+offset,row,218.0)
 			ridges_valid = ridges_valid and not Geometry2D.triangulate_polygon(ridge).is_empty()
 		check(ridges_valid,"Ground ridges remain drawable when a collected sky's horizon crosses the viewport bottom")
+	# Only a newly completed constellation starts the bounded sky celebration.
+	game.paused = false
+	game.show_help = false
+	game.muted = true
+	for night in range(5):
+		game.reduced_motion = false
+		game._new_chapter(night)
+		game._award_goal(0.0,game._point(0.0),0)
+		check(not game._completion_visual_state()["active"],"An ordinary successful star does not celebrate the whole constellation")
+		for goal in range(1,game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+		check(game._completion_visual_state()["phase"]=="trace" and game.finish_time==0.0,"The final actual award starts the sky trace once")
+		var phases: Array = []
+		var bounded := true
+		var previous_trace := 0.0
+		for at in [0.0,1.0,2.4,3.0,4.2,5.3]:
+			game.finish_time = at
+			var visual: Dictionary = game._completion_visual_state()
+			phases.append(visual["phase"])
+			bounded = bounded and float(visual["trace"])>=previous_trace and float(visual["shimmer"])>=0.0 and float(visual["shimmer"])<=1.0 and float(visual["afterglow"])>=0.0 and float(visual["afterglow"])<=1.0
+			previous_trace = float(visual["trace"])
+		check(bounded and phases==["trace","trace","shimmer","shimmer","afterglow","settled"],"Every night traces, shimmers once and settles without a looping flash")
+		game.reduced_motion = true
+		game.finish_time = 0.9
+		var gentle: Dictionary = game._completion_visual_state()
+		game.finish_time = 3.5
+		check(gentle["phase"]=="shimmer" and gentle["currentEdge"]==-1 and gentle["trace"]==1.0 and game._completion_visual_state()["phase"]=="settled","Reduced motion signals completion with a static whole-figure shimmer, then settles")
+		game._enter_garden(false)
+		game.listening_resume = {"chapter":night,"casts":2,"perfects":1}
+		game._return_to_journey()
+		check(game._completion_visual_state()["phase"]=="settled" and not game._completion_visual_state()["active"],"Completed-score restore cannot replay the celebration")
+		game._begin_pull(game._point(0.0))
+		check(game._completion_visual_state()["phase"]=="settled","Playing a restored completed night cannot restart a completion effect")
+	game.reduced_motion = false
+	game.finish_time = 0.6
+	var held_celebration: Dictionary = game._completion_visual_state()
+	game.paused = true
+	game._process(0.5)
+	check(game._completion_visual_state()==held_celebration,"Pause retains the current completion trace")
+	game.paused = false
+	game.show_help = true
+	game._process(0.5)
+	check(game._completion_visual_state()==held_celebration,"Help retains the current completion trace")
+	game.show_help = false
+	# Finished nights keep their score and records while the same moon remains playable.
+	for night in range(5):
+		game._new_chapter(night)
+		game.casts = 2
+		for goal in range(game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+		var finished_progress: int = game.progress
+		var finished_perfects: int = game.perfects
+		var finished_best: Array = game.best_casts.duplicate()
+		game.finish_time = 7.0
+		for angle in [-1.1,0.9,1.2,-0.5]:
+			game._begin_pull(game._point(0.0))
+			game._set_pull_angle(angle)
+			game._release()
+			var release_time: float = game.finish_time
+			for tick in range(210):
+				game._process(1.0/60.0)
+				game._physics_process(1.0/60.0)
+			check(game.casts==2 and game.progress==finished_progress and game.perfects==finished_perfects and game.best_casts==finished_best,"Completed-night improvisation retains the achievement, tally and best result")
+			check(game.cast_judged and game.night_music.completed and game.night_music.completion_starts==1 and game.finish_time>release_time and not game._completion_visual_state()["active"],"Completed-night improvisation cannot refire the award or celebration")
+			check(game.players.size()==12 and game.night_music.players.size()==16 and game.trail.size()<=115 and game.particles.size()<180 and game.echo_transfers.size()<=4,"Repeated finished-night pulls retain bounded audio and visual resources")
+		var reset_finished := InputEventKey.new()
+		reset_finished.pressed = true
+		reset_finished.keycode = KEY_R
+		game._input(reset_finished)
+		check(game.chapter_done and game.progress==finished_progress and game.casts==2 and game.transition_phase==0 and game.theta==0.0,"R returns the completed moon without restarting its night")
+		reset_finished.keycode = KEY_RIGHT
+		game._input(reset_finished)
+		game._advance_keyboard_aim(0.8,1.0)
+		check(game.dragging and game.keyboard_aim and game.theta>0.6,"The completed moon also accepts keyboard expression")
+		reset_finished.keycode = KEY_SPACE
+		game._input(reset_finished)
+		check(game.swinging and game.casts==2 and game.cast_judged,"Keyboard release remains unscored in a completed night")
+	game._enter_garden(false)
+	game.reduced_motion = true
+	game._open_collection()
+	game._process(0.11)
+	check(is_equal_approx(game._collection_alpha(),0.5),"Reduced motion keeps a short gentle collection dissolve")
+	game._close_collection()
+	game._process(0.22)
+	check(not game._collection_blocking(),"Reduced-motion closing releases gestures after its short dissolve")
+	# Hidden introduction controls cannot react, and their gradual return survives interruptions.
+	var hud_tap := InputEventMouseButton.new()
+	hud_tap.button_index = MOUSE_BUTTON_LEFT
+	hud_tap.pressed = true
+	var hud_key := InputEventKey.new()
+	hud_key.pressed = true
+	for gentle in [false,true]:
+		game.reduced_motion = gentle
+		for night in range(5):
+			game.transition_phase = 0
+			game.paused = false
+			game.show_help = false
+			game._new_chapter(5)
+			game._request_transition("chapter",night)
+			advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.02)
+			check(game.night_opening and game._hud_alpha()==0.0,"Every new night keeps its title and controls absent while the sky is introduced")
+			var before_muted: bool = game.muted
+			var before_time: float = game.night_opening_time
+			for area in [game.mute_rect,game.help_rect,game.pause_rect,game.reset_rect,game.retry_rect]:
+				hud_tap.position = area.get_center()
+				game._input(hud_tap)
+				game._input(hud_tap)
+			check(game.muted==before_muted and not game.paused and not game.show_help and game.transition_action=="chapter" and game.night_opening_time==before_time,"Repeated taps on absent controls cannot toggle sound, interrupt or navigate")
+			hud_key.keycode = KEY_P
+			game._input(hud_key)
+			advance_for(0.4)
+			check(game.paused and game._hud_alpha()==0.0 and game.night_opening_time==before_time,"Keyboard pause preserves the hidden sky and its reveal time")
+			hud_tap.position = game.resume_rect.get_center()
+			game._input(hud_tap)
+			check(not game.paused,"The visible resume overlay remains usable while ordinary controls are hidden")
+			hud_key.keycode = KEY_H
+			game._input(hud_key)
+			advance_for(0.4)
+			check(game.show_help and game.night_opening_time==before_time,"Help preserves the introduction without consuming its fade")
+			hud_tap.position = game.help_rect.get_center()
+			game._input(hud_tap)
+			var reveal_seconds: float = game.NIGHT_DISSOLVE if gentle else game.NIGHT_PAN
+			advance_for(game.NIGHT_VIEW-game.night_opening_time+reveal_seconds*0.5)
+			var middle_alpha: float = game._hud_alpha()
+			check(not game.show_help and middle_alpha>0.0 and middle_alpha<1.0,"Title and controls return gradually with the instrument in both motion settings")
+			hud_tap.position = game.mute_rect.get_center()
+			game._input(hud_tap)
+			check(game.muted==before_muted and not game.dragging and game.casts==0,"Partly revealed controls stay locked until the instrument is ready")
+			hud_key.keycode = KEY_P
+			game._input(hud_key)
+			advance_for(0.3)
+			check(game._hud_alpha()==middle_alpha,"Pause also retains a partly revealed header without an opacity jump")
+			hud_tap.position = game.pause_rect.get_center()
+			game._input(hud_tap)
+			if not gentle and night==2:
+				game._pause_for_focus_loss()
+				advance_for(0.3)
+				check(game.paused and game._hud_alpha()==middle_alpha,"Leaving the app retains the partly revealed title until explicit resume")
+				hud_tap.position = game.resume_rect.get_center()
+				game._input(hud_tap)
+				check(not game.paused,"Returning from focus loss can resume while ordinary introduction controls are locked")
+			advance_for(reveal_seconds*0.5+0.02)
+			check(not game.night_opening and game.transition_phase==0 and game._hud_alpha()==1.0,"Every reveal finishes with fully visible, available controls")
+			hud_tap.position = game.mute_rect.get_center()
+			game._input(hud_tap)
+			check(game.muted!=before_muted,"Visible controls accept input again after the introduction")
+			game._input(hud_tap)
+	game.reduced_motion = false
+	game._new_chapter(5)
+	game._request_transition("chapter",1)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.3)
+	hud_key.keycode = KEY_H
+	game._input(hud_key)
+	hud_tap.position = game.help_repeat_rect.get_center()
+	game._input(hud_tap)
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	check(not game.show_help and not game.paused and not game.night_opening and game._hud_alpha()==1.0 and game.chapter==1,"Explicit retry during an interrupted introduction restores an ordinary visible header")
+	game._request_transition("garden")
+	advance_for(game.TRANSITION_OUT-0.001)
+	var covered_muted: bool = game.muted
+	hud_tap.position = game.mute_rect.get_center()
+	game._input(hud_tap)
+	check(game.muted==covered_muted,"A control concealed by the night-switch curtain cannot respond to a stray tap")
+	advance_for(game.TRANSITION_QUIET+game.TRANSITION_IN+0.03)
+	check(game.free_play and game.transition_phase==0 and game._hud_alpha()==1.0,"The garden returns with visible controls after a covered transition")
+	for night in range(5):
+		game._new_chapter(night)
+		for goal in range(game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+		check(game._completion_actions_alpha()==0.0,"Completion does not instantly replace the footer with navigation")
+		hud_tap.position = (game.retry_rect if game.retry_rect.size.x>0.0 else game.next_rect).get_center()
+		game._input(hud_tap)
+		check(game.transition_phase==0 and game.chapter_done,"An invisible completion action cannot navigate before its fade")
+		advance_for(0.36)
+		check(game._completion_actions_alpha()>0.0 and game._completion_actions_alpha()<1.0,"Completion actions become visible through a gradual fade")
+		game._input(hud_tap)
+		check(game.transition_phase==0,"A partly revealed completion action still rejects accidental taps")
+		advance_for(0.25)
+		check(game._completion_actions_alpha()==1.0,"Completion navigation becomes fully visible before accepting a tap")
+		game._input(hud_tap)
+		check(game.transition_phase==1 and game.transition_action=="garden","Fully visible completion navigation remains usable in all five nights")
+		advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
 	print("PASS: %d gameplay checks, all 11 constellation goals / 15 lights across 5 nights" % checks)
 	game.paused = true
 	game._stop_audio(true)

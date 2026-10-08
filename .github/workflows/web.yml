@@ -51,6 +51,7 @@ jobs:
           "$GODOT" --headless --path game --editor --import --quit 2>&1 | tee "$RUNNER_TEMP/godot-import.log"
           if grep -qE 'SCRIPT ERROR:|^ERROR:' "$RUNNER_TEMP/godot-import.log"; then exit 1; fi
           "$GODOT" --headless --path game --script res://tests/test_game.gd
+          node tools/test_web_gl_handles.cjs
       - name: Export single-thread Compatibility Web game
         shell: bash
         run: |
