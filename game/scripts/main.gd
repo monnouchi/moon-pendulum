@@ -1655,7 +1655,7 @@ func _draw() -> void:
 	if night_opening:
 		_draw_night_name()
 	if started and _hud_alpha()>0.0:
-		var alpha := _hud_alpha()
+		var alpha := _footer_alpha()
 		_draw_score(alpha)
 		if chapter_done and finish_time<0.18:
 			var old_rect := Rect2(size.x*0.5-110.0,size.y-106.0,220.0,72.0)
@@ -1832,6 +1832,11 @@ func _hud_alpha() -> float:
 	if reduced_motion:
 		return smoothstep(NIGHT_VIEW+NIGHT_DISSOLVE*0.30,NIGHT_VIEW+NIGHT_DISSOLVE,night_opening_time)
 	return smoothstep(0.15,0.95,_night_pan())
+
+func _footer_alpha() -> float:
+	# Wait until the rising instrument has cleared the lower controls.
+	if night_opening and not reduced_motion:return smoothstep(0.92,1.0,_night_pan())
+	return _hud_alpha()
 
 func _completion_actions_alpha() -> float:
 	return smoothstep(0.18,0.55,finish_time) if chapter_done and not free_play else 1.0
@@ -2407,7 +2412,7 @@ func _publish_state() -> void:
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
 		state["completion"] = _completion_visual_state()
-		state["hud"] = {"alpha":_hud_alpha(),"interactive":started and not paused and not show_help and not _collection_blocking() and not night_opening and _hud_alpha()*_transition_audio_gain()>0.05,"completionActionsAlpha":_completion_actions_alpha()}
+		state["hud"] = {"alpha":_hud_alpha(),"footerAlpha":_footer_alpha(),"interactive":started and not paused and not show_help and not _collection_blocking() and not night_opening and _hud_alpha()*_transition_audio_gain()>0.05,"completionActionsAlpha":_completion_actions_alpha()}
 		state["collection"] = {"open":show_collection,"alpha":_collection_alpha(),"blocking":_collection_blocking(),"musicGain":_collection_audio_gain(),"night":garden_night,"choices":collection_choices.duplicate(),"entry":[collection_rect.get_center().x,collection_rect.get_center().y],"rows":collection_rows.map(func(rect):return [rect.get_center().x,rect.get_center().y]),"close":[collection_close_rect.get_center().x,collection_close_rect.get_center().y],"harmony":_harmony_index(),"instrument":_instrument_index()}
 		state["resources"] = {"bellPlayers":players.size(),"musicPlayers":night_music.players.size(),"particles":particles.size(),"flights":light_flights.size(),"ripples":ripples.size(),"trail":trail.size(),"returns":echo_returns.size(),"transfers":echo_transfers.size()}
 		state["feedback"] = {"text":feedback,"remaining":feedback_timer,"alpha":_feedback_alpha(),"previous":{"text":feedback_previous,"alpha":_previous_feedback_alpha()},"crossfade":feedback_blend,"hold":feedback_hold,"fade":_feedback_fade_seconds()}

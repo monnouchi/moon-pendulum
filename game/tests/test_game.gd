@@ -1376,7 +1376,14 @@ func run() -> void:
 				hud_tap.position = game.resume_rect.get_center()
 				game._input(hud_tap)
 				check(not game.paused,"Returning from focus loss can resume while ordinary introduction controls are locked")
-			advance_for(reveal_seconds*0.5+0.02)
+			if gentle:
+				check(game._footer_alpha()==middle_alpha,"Reduced motion keeps the footer in the same short dissolve as the header")
+				advance_for(reveal_seconds*0.5+0.02)
+			else:
+				check(game._footer_alpha()==0.0,"Lower controls stay absent while the instrument is still crossing their area")
+				advance_for(reveal_seconds*0.3)
+				check(game._footer_alpha()>0.0 and game._footer_alpha()<1.0,"Lower controls fade in after the instrument clears their area")
+				advance_for(reveal_seconds*0.2+0.02)
 			check(not game.night_opening and game.transition_phase==0 and game._hud_alpha()==1.0,"Every reveal finishes with fully visible, available controls")
 			hud_tap.position = game.mute_rect.get_center()
 			game._input(hud_tap)
