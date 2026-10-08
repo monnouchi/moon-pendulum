@@ -780,7 +780,7 @@ func run() -> void:
 	game.listening_resume = {"chapter":4,"casts":2,"perfects":2}
 	game._return_to_journey()
 	check(game.chapter==4 and game.chapter_done and game.progress==2 and game.night_music.pieces==4,"Direct restoration retains the completed final night for listening")
-	check(game._journey_entry_label()=="音のつづき","The garden's completed-score entrance describes listening instead of a playable stage")
+	check(game._journey_entry_label()=="完成した曲を聴く","The garden's completed-score entrance describes listening instead of a playable stage")
 	game._request_transition("garden")
 	check(game.listening_resume.is_empty() and game.transition_resume["chapter"]==0,"Explicit final exit clears listening before a refresh can interrupt the curtain")
 	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+game.NIGHT_VIEW+game.NIGHT_PAN+0.02)
@@ -803,7 +803,7 @@ func run() -> void:
 	game._new_chapter(0)
 	game.started = false
 	game._start()
-	check(game.free_play and game.listening_resume["chapter"]==4 and game._journey_entry_label()=="音のつづき","Title entry preserves a legacy final-listening save inside the garden")
+	check(game.free_play and game.listening_resume["chapter"]==4 and game._journey_entry_label()=="完成した曲を聴く","Title entry preserves a legacy final-listening save inside the garden")
 	game._return_to_journey()
 	check(game.chapter==4 and game.chapter_done and game.night_music.pieces==4 and game.night_music.completion_starts==0,"The garden restores the legacy final score without a repeated reward")
 	game._enter_garden()
@@ -1131,6 +1131,91 @@ func run() -> void:
 	game._set_feedback("指を離すと、月が揺れる。")
 	game._cancel_aim()
 	check(not game.dragging and game.feedback=="月を引いて、離す。","Cancelling a held gesture replaces its stale release instruction")
+	# Garden collections are optional v1 data; they never grant an uncleared night.
+	var collection_save: Dictionary = checkpoint.duplicate(true)
+	collection_save["best"] = [3,0,3,0,3]
+	collection_save["bestCasts"] = [3,0,2,0,2]
+	collection_save["journey"] = {"chapter":2,"progress":1,"casts":3,"perfects":1,"lit":[true,false]}
+	collection_save["listening"] = {"chapter":4,"casts":2,"perfects":2}
+	var old_collection_config = game._config_from_checkpoint(collection_save)
+	check(old_collection_config!=null and old_collection_config.get_value("settings","garden_night")==-1,"Old saves retain the standard garden without a collection field")
+	for value in [-2,5,1,3,"2",true,1.5,NAN,INF]:
+		collection_save["gardenNight"] = value
+		var cleaned = game._config_from_checkpoint(collection_save)
+		check(cleaned!=null and cleaned.get_value("settings","garden_night")==-1 and cleaned.get_value("journey","resume")==collection_save["journey"],"An invalid or locked collection selection preserves valid journey data")
+	for index in [-1,0,2,4]:
+		collection_save["gardenNight"] = index
+		var cleaned = game._config_from_checkpoint(collection_save)
+		check(cleaned.get_value("settings","garden_night")==index and cleaned.get_value("music","listening")==collection_save["listening"],"A valid collection selection keeps completed-score listening intact")
+	game.best_chapters.assign([3,0,3,0,3])
+	game.garden_night = -1
+	game.transition_phase = 0
+	game.paused = false
+	game.show_help = false
+	game.reduced_motion = false
+	game._enter_garden(false)
+	check(game.collection_choices==[-1,0,2,4],"The collection lists the standard garden and only completed nights")
+	var collection_journey: Dictionary = game.journey_resume.duplicate(true)
+	var collection_records: Array = game.best_casts.duplicate()
+	game._request_transition("collection",1)
+	check(game.transition_phase==0 and game.garden_night==-1,"A locked night cannot be selected through a transition request")
+	game._set_garden_night(2)
+	check(game.free_play and not game.chapter_done and game._harmony_index()==2 and game._scene_index()==2 and game._instrument_index()==2,"A collected night changes the playable garden's harmony, scene and instrument finish together")
+	check(game.night_music.night==2 and game.night_music.completed and game.night_music.pieces==2,"The collected night restores all of its authored phrases without a new achievement")
+	var collection_casts: int = game.casts
+	game._begin_pull(game._point(0.0))
+	game._set_pull_angle(0.7)
+	game._release()
+	check(game.swinging and game.casts==collection_casts+1,"The completed collection remains freely playable")
+	check(game.journey_resume==collection_journey and game.best_casts==collection_records,"Collection performance cannot rewrite journey progress or stroke records")
+	game.muted = false
+	game._process(0.02)
+	var collection_clock: float = game.night_music.time
+	var collection_theta: float = game.theta
+	game.show_collection = true
+	game._stop_audio()
+	game._process(0.10)
+	game._physics_process(0.10)
+	check(game.night_music.time==collection_clock and game.theta==collection_theta and game.night_music.snapshot()["audibleVoices"]==0,"The choice surface freezes both music and motion and silences the old voices")
+	game.show_collection = false
+	game.muted = true
+	game.best_chapters.assign([3,3,3,3,3])
+	game._layout()
+	for index in range(5):
+		game._request_transition("collection",index)
+		game._request_transition("collection",(index+1)%5)
+		check(game.transition_chapter==index,"Repeated selection cannot queue or replace an in-flight collection transition")
+		advance_for(1.43)
+		check(game.transition_phase==0 and game.garden_night==index and game.night_music.night==index and game.night_music.pieces==game.HARMONY.NIGHTS[index]["layers"].size(),"Every collected night restores its own full score")
+		check(game.journey_resume==collection_journey and game.best_casts==collection_records,"Night switching preserves all journey and best records")
+	game.reduced_motion = true
+	game._request_transition("collection",-1)
+	advance_for(0.50)
+	check(game.transition_phase==0 and game.garden_night==-1 and game._harmony_index()==0 and game._instrument_index()==5,"Reduced motion returns to the standard garden with a short opacity transition")
+	check(game.night_music.leaving,"Returning to the standard garden retires the collected score")
+	game._set_garden_night(4)
+	game.listening_resume = {}
+	game.journey_resume = {"chapter":1,"progress":0,"casts":0,"perfects":0,"introSeen":true}
+	game._return_to_journey()
+	check(not game.free_play and game.chapter==1 and game._harmony_index()==1 and game.night_music.pieces==0,"An active journey uses its own harmony instead of the garden's selected collection")
+	game._enter_garden()
+	check(game.free_play and game.garden_night==4 and game.night_music.night==4,"A detour back to the garden remembers its chosen collection")
+	game.listening_resume = {"chapter":2,"casts":2,"perfects":2}
+	game._return_to_journey()
+	var listening_casts: int = game.casts
+	game._begin_pull(game._point(0.0))
+	check(not game.dragging and game.casts==listening_casts and game.feedback.contains("完成した曲を聴いて"),"Touching a completed listening moon acknowledges the action without rewriting completion")
+	game._enter_garden(false)
+	game.show_collection = true
+	var held_collection_night: int = game.garden_night
+	game._pause_for_focus_loss()
+	check(game.paused and not game.show_collection and game.garden_night==held_collection_night,"Focus loss closes the collection before presenting the ordinary resume control")
+	for offset in [-24.0,-12.0,0.0,12.0,24.0,48.0]:
+		var ridges_valid := true
+		for row in range(3):
+			var ridge: PackedVector2Array = game._horizon_polygon(game.size.y+offset,row,218.0)
+			ridges_valid = ridges_valid and not Geometry2D.triangulate_polygon(ridge).is_empty()
+		check(ridges_valid,"Ground ridges remain drawable when a collected sky's horizon crosses the viewport bottom")
 	print("PASS: %d gameplay checks, all 11 constellation goals / 15 lights across 5 nights" % checks)
 	game.paused = true
 	game._stop_audio(true)

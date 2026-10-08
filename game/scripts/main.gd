@@ -5,6 +5,7 @@ extends Node2D
 const BUILD = preload("res://build_info.gd")
 const NIGHT_MUSIC = preload("res://scripts/night_music.gd")
 const HARMONY = preload("res://scripts/night_harmony.gd")
+const INSTRUMENT = preload("res://scripts/instrument_art.gd")
 const FONT = preload("res://assets/fonts/MoonSerifUI.tres")
 const BELL_ANGLES = [-0.96, -0.66, -0.34, 0.0, 0.34, 0.66, 0.96]
 const NOTE_NAMES = ["D3", "A3", "D4", "E4", "F♯4", "B4", "D5"]
@@ -36,7 +37,7 @@ const INTRO_SWAY = 0.055
 const INTRO_PERIOD = 6.0
 const INTRO_HIT_RADIUS = 60.0
 const INTRO_SETTLE = 0.35
-const COMPLETION_FEEDBACK = "星座が灯った。夜に、旋律が残った。"
+const COMPLETION_FEEDBACK = "星座が灯った。夜に、響きが満ちた。"
 const COMPLETION_FEEDBACK_HOLD = 3.5
 const COMPLETION_FEEDBACK_FADE = 1.5
 const COMPLETION_FEEDBACK_FADE_REDUCED = 0.5
@@ -73,6 +74,13 @@ var main_turns := 0
 var cast_awards := 0
 var chapter_done := false
 var show_help := false
+var show_collection := false
+var garden_night := -1
+var collection_rect := Rect2()
+var collection_panel := Rect2()
+var collection_close_rect := Rect2()
+var collection_rows: Array[Rect2] = []
+var collection_choices: Array[int] = []
 var target_pulse := 0.0
 var finish_time := 0.0
 var feedback := "光の輪へ、反対側から月を届かせよう。"
@@ -244,6 +252,7 @@ func _cancel_aim() -> void:
 
 func _pause_for_focus_loss() -> void:
 	_cancel_aim()
+	show_collection = false
 	paused = true
 	dragging = false
 	keyboard_aim = false
@@ -293,7 +302,7 @@ func _layout() -> void:
 	var sky_height := maxf(45.0,minf(300.0 if playing_night else 156.0,pivot.y-sky_top-42.0))
 	# The first sky keeps its larger hero scale before drawing back to the stage.
 	var sky_width := minf(size.x*(0.68 if playing_night else 0.62),470.0 if playing_night else 350.0)
-	sky_fitted = SKY_SCENE.fit(chapter,Rect2(size.x*0.5-sky_width*0.5,sky_top,sky_width,sky_height))
+	sky_fitted = SKY_SCENE.fit(_scene_index(),Rect2(size.x*0.5-sky_width*0.5,sky_top,sky_width,sky_height))
 	sky_points = sky_fitted["points"]
 	sky_box = SKY.bounds(Array(sky_points))
 	mute_rect = Rect2(size.x - 128.0, 20.0, 104.0, 66.0)
@@ -302,6 +311,17 @@ func _layout() -> void:
 	help_repeat_rect = Rect2(size.x*0.5-126.0,size.y*0.26+420.0,252.0,56.0)
 	help_restart_rect = Rect2(size.x*0.5-126.0,size.y*0.26+490.0,252.0,66.0)
 	resume_rect = Rect2(size.x*0.5-110.0,size.y*0.46+25.0,220.0,58.0)
+	collection_rect = Rect2(size.x*0.5-130.0,size.y-235.0,260.0,72.0)
+	collection_choices.assign([-1])
+	for index in range(CHAPTERS.size()):
+		if int(best_chapters[index])>0:collection_choices.append(index)
+	var panel_width := minf(560.0,size.x-40.0)
+	var panel_height := 198.0+float(collection_choices.size())*74.0
+	collection_panel = Rect2(size.x*0.5-panel_width*0.5,size.y*0.5-panel_height*0.5,panel_width,panel_height)
+	collection_rows.clear()
+	for row in range(collection_choices.size()):
+		collection_rows.append(Rect2(collection_panel.position+Vector2(18.0,74.0+float(row)*74.0),Vector2(panel_width-36.0,68.0)))
+	collection_close_rect = Rect2(collection_panel.position+Vector2(panel_width*0.5-90.0,panel_height-82.0),Vector2(180.0,68.0))
 
 func _goal_index() -> int:
 	var count: int = CHAPTERS[chapter]["targets"].size()
@@ -361,12 +381,12 @@ func _intro_moon_hit(pos: Vector2) -> bool:
 
 func _process(delta: float) -> void:
 	_advance_audio_envelopes(delta)
-	night_music.advance(delta,started and not free_play and not muted and not paused and not show_help and transition_phase!=1,_transition_audio_gain(),muted or paused or show_help,paused or show_help)
+	night_music.advance(delta,started and (not free_play or garden_night>=0) and not muted and not paused and not show_help and not show_collection and transition_phase!=1,_transition_audio_gain(),muted or paused or show_help or show_collection,paused or show_help or show_collection)
 	state_clock += delta
 	if state_clock >= 0.5:
 		state_clock = 0.0
 		_publish_state()
-	if not paused and not show_help:
+	if not paused and not show_help and not show_collection:
 		_advance_transition(delta)
 		elapsed += delta
 		intro_settle = maxf(0.0,intro_settle-delta)
@@ -416,7 +436,7 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _physics_process(delta: float) -> void:
-	if not started or paused or show_help or transition_phase!=0:
+	if not started or paused or show_help or show_collection or transition_phase!=0:
 		return
 	_echo_physics(delta)
 	if dragging or not swinging:
@@ -756,7 +776,7 @@ func _cycle_palette() -> void:
 	_publish_state()
 
 func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.0, pitch: float = 1.0) -> void:
-	if muted or not started or paused or show_help:
+	if muted or not started or paused or show_help or show_collection:
 		return
 	night_music.duck()
 	var slot := voice % BELL_VOICES
@@ -764,7 +784,7 @@ func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.
 	_play_voice(stream,strength,base_db,slot,pitch)
 
 func _play_voice(stream: AudioStreamWAV, strength: float, base_db: float, slot: int, pitch: float = 1.0) -> void:
-	if muted or not started or paused or show_help:
+	if muted or not started or paused or show_help or show_collection:
 		return
 	var player := players[slot]
 	player.stream = stream
@@ -776,9 +796,9 @@ func _play_voice(stream: AudioStreamWAV, strength: float, base_db: float, slot: 
 	_apply_voice_gain(slot)
 	player.play()
 	if transition_phase==1:
-		_fade_voice(slot,0.0,maxf(0.001,TRANSITION_OUT-transition_time))
+		_fade_voice(slot,0.0,maxf(0.001,_transition_out_seconds()-transition_time))
 	elif transition_phase==2:
-		_fade_voice(slot,1.0,maxf(0.001,TRANSITION_IN-transition_time))
+		_fade_voice(slot,1.0,maxf(0.001,_transition_in_seconds()-transition_time))
 
 func _play_coda() -> void:
 	if coda_started or free_play:
@@ -813,13 +833,42 @@ func _coda_light() -> float:
 	return 0.42+pulse
 
 func _harmony_index() -> int:
-	return 0 if free_play else chapter
+	return maxi(0,garden_night) if free_play else chapter
+
+func _scene_index() -> int:
+	return garden_night if free_play and garden_night>=0 else chapter
+
+func _instrument_index() -> int:
+	return garden_night if free_play and garden_night>=0 else (chapter if started and not free_play else 5)
+
+func _garden_night_allowed(index: int) -> bool:
+	return index==-1 or (index>=0 and index<CHAPTERS.size() and int(best_chapters[index])>0)
+
+func _validated_garden_night(value: Variant, best: Array) -> int:
+	if not _checkpoint_number(value,-1,CHAPTERS.size()-1,true):return -1
+	var index := int(value)
+	return index if index==-1 or int(best[index])>0 else -1
+
+func _set_garden_night(index: int) -> void:
+	if not free_play or not _garden_night_allowed(index):return
+	garden_night = index
+	_retry(false)
+	if index>=0:
+		night_music.begin(index,HARMONY.NIGHTS[index]["layers"].size(),true)
+	else:
+		night_music.leave(0.12)
+	_layout()
+	_clear_feedback()
+	_set_feedback("月を引いて、この夜を奏でよう。" if index>=0 else "月を引いて、あなたの夜を奏でよう。")
+	_save()
+	_publish_state()
 
 func _bell_name(index: int) -> String:
 	return str(HARMONY.NIGHTS[_harmony_index()]["bell_names"][index])
 
 func _echo_index(side: int) -> int:
-	return side + (2 if chapter >= 2 else 0)
+	var night := garden_night if free_play and garden_night>=0 else chapter
+	return side + (2 if night >= 2 else 0)
 
 func _sound(index: int, strength: float = 0.8) -> void:
 	_play_sample(sound_banks[palette_index][index],strength,-13.0,float(bell_rates[_harmony_index()][index]))
@@ -871,24 +920,34 @@ func _stop_audio(immediate: bool = false) -> void:
 		elif players[i].playing:
 			_fade_voice(i,0.0,0.035,true)
 
+func _transition_out_seconds() -> float:
+	return (0.22 if reduced_motion else 0.65) if transition_action=="collection" else TRANSITION_OUT
+
+func _transition_in_seconds() -> float:
+	return (0.22 if reduced_motion else 0.65) if transition_action=="collection" else TRANSITION_IN
+
+func _transition_quiet_seconds() -> float:
+	return (0.05 if reduced_motion else 0.12) if transition_action=="collection" else TRANSITION_QUIET
+
 func _transition_audio_gain() -> float:
 	if transition_phase==0:
 		return 1.0
-	var t := clampf(transition_time/(TRANSITION_OUT if transition_phase==1 else TRANSITION_IN),0.0,1.0)
+	var t := clampf(transition_time/(_transition_out_seconds() if transition_phase==1 else _transition_in_seconds()),0.0,1.0)
 	var ease := t*t*(3.0-2.0*t)
 	return 1.0-ease if transition_phase==1 else ease
 
 func _request_transition(action: String, index: int = 0) -> void:
-	if action not in ["chapter","garden","journey","restart","repeat"] or (transition_phase!=0 and action not in ["restart","repeat"]):
+	if action not in ["chapter","garden","journey","restart","repeat","collection"] or (transition_phase!=0 and action not in ["restart","repeat"]):
 		return
 	if action in ["chapter","repeat"] and (index<0 or index>=CHAPTERS.size()):
 		return
+	if action=="collection" and (not free_play or not _garden_night_allowed(index)):return
 	var continue_time := 0.0
 	if transition_phase==1:
 		continue_time = transition_time
 	elif transition_phase==2:
 		# Reverse the curtain at its present opacity, without a bright flash.
-		continue_time = TRANSITION_OUT*(1.0-clampf(transition_time/TRANSITION_IN,0.0,1.0))
+		continue_time = _transition_out_seconds()*(1.0-clampf(transition_time/_transition_in_seconds(),0.0,1.0))
 	_cancel_aim()
 	transition_phase = 1
 	transition_time = continue_time
@@ -906,10 +965,10 @@ func _request_transition(action: String, index: int = 0) -> void:
 	# refresh must not undo the explicit "start over" the player just chose.
 	_save()
 	# Let the old score reach silence before the next night begins.
-	night_music.leave(maxf(0.001,TRANSITION_OUT-transition_time))
+	night_music.leave(maxf(0.001,_transition_out_seconds()-transition_time))
 	for i in range(players.size()):
 		if players[i].playing:
-			var duration := maxf(0.001,TRANSITION_OUT-transition_time)
+			var duration := maxf(0.001,_transition_out_seconds()-transition_time)
 			_fade_voice(i,0.0,duration)
 	_publish_state()
 
@@ -917,14 +976,15 @@ func _advance_transition(delta: float) -> void:
 	if transition_phase==0:
 		return
 	transition_time += delta
-	if transition_phase==1 and transition_time>=TRANSITION_OUT+TRANSITION_QUIET:
+	if transition_phase==1 and transition_time>=_transition_out_seconds()+_transition_quiet_seconds():
 		transition_phase = 2
-		transition_time -= TRANSITION_OUT+TRANSITION_QUIET
+		transition_time -= _transition_out_seconds()+_transition_quiet_seconds()
 		match transition_action:
 			"chapter", "repeat": _new_chapter(transition_chapter)
 			"garden": _enter_garden()
 			"journey": _return_to_journey()
 			"restart": _return_to_journey(true)
+			"collection": _set_garden_night(transition_chapter)
 		if transition_skip_opening:
 			night_intro_seen = true
 		if not free_play and not chapter_done and not night_intro_seen:
@@ -937,7 +997,7 @@ func _advance_transition(delta: float) -> void:
 		_publish_state()
 	if transition_phase==2 and night_opening:
 		night_opening_time = transition_time
-	var duration := NIGHT_VIEW+(NIGHT_DISSOLVE if reduced_motion else NIGHT_PAN) if night_opening else TRANSITION_IN
+	var duration := NIGHT_VIEW+(NIGHT_DISSOLVE if reduced_motion else NIGHT_PAN) if night_opening else _transition_in_seconds()
 	if transition_phase==2 and transition_time>=duration:
 		transition_phase = 0
 		transition_time = 0.0
@@ -1057,7 +1117,11 @@ func _judge_echo_turn(side: int, angle: float) -> void:
 	_publish_state()
 
 func _begin_pull(pos: Vector2) -> void:
-	if chapter_done or show_help or paused:
+	if show_help or paused or show_collection:
+		return
+	if chapter_done:
+		_set_feedback("完成した曲を聴いています。庭で月を奏でよう。")
+		_publish_state()
 		return
 	turn_advice.clear()
 	dragging = true
@@ -1127,7 +1191,7 @@ func _finish_cycle_for_garden() -> void:
 
 func _journey_entry_label() -> String:
 	if not listening_resume.is_empty():
-		return "音のつづき"
+		return "完成した曲を聴く"
 	var fresh_cycle := journey_resume.is_empty() or (int(journey_resume.get("chapter",0))==0 and int(journey_resume.get("progress",0))==0 and int(journey_resume.get("casts",0))==0)
 	if listening_resume.is_empty() and _resume_chapter()==CHAPTERS.size() and fresh_cycle:
 		return "もう一度"
@@ -1190,6 +1254,7 @@ func _return_to_journey(restart: bool = false) -> void:
 	_layout()
 	if chapter_done:
 		_clear_feedback()
+		_set_feedback("完成した曲を聴いています。庭で月を奏でよう。",4.0,1.0)
 	else:
 		_set_feedback("金の輪で折り返すと、上の星が灯る。" if _goal_kind()=="main" else "鐘の力を、小さな月の光へ届けよう。")
 	_save()
@@ -1217,6 +1282,7 @@ func _retry(clear_cadence: bool = true) -> void:
 	_publish_state()
 
 func _new_chapter(index: int) -> void:
+	show_collection = false
 	_clear_feedback()
 	_clear_turn_advice()
 	night_opening = false
@@ -1225,7 +1291,11 @@ func _new_chapter(index: int) -> void:
 	free_play = index == CHAPTERS.size()
 	chapter = 2 if free_play else clampi(index, 0, CHAPTERS.size()-1)
 	if free_play:
-		night_music.leave(TRANSITION_OUT)
+		garden_night = _validated_garden_night(garden_night,best_chapters)
+		if garden_night>=0:
+			night_music.begin(garden_night,HARMONY.NIGHTS[garden_night]["layers"].size(),true)
+		else:
+			night_music.leave(TRANSITION_OUT)
 	else:
 		night_music.begin(chapter)
 	gravity_index = saved_gravity_index if free_play else 1
@@ -1262,6 +1332,24 @@ func _toggle_mute() -> void:
 	_publish_state()
 
 func _input(event: InputEvent) -> void:
+	if show_collection:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode==KEY_M:_toggle_mute()
+			elif event.keycode in [KEY_ESCAPE,KEY_H]:
+				show_collection = false
+				_publish_state()
+		elif event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_LEFT and event.pressed:
+			if collection_close_rect.has_point(event.position) or not collection_panel.has_point(event.position):
+				show_collection = false
+			else:
+				for row in range(collection_rows.size()):
+					if collection_rows[row].has_point(event.position):
+						show_collection = false
+						var index := collection_choices[row]
+						if index!=garden_night:_request_transition("collection",index)
+						break
+			_publish_state()
+		return
 	if transition_phase!=0 and not show_help:
 		var interruption := false
 		if event is InputEventKey:
@@ -1310,6 +1398,11 @@ func _input(event: InputEvent) -> void:
 				_publish_state()
 			elif show_help:
 				show_help = false
+				_publish_state()
+			elif free_play and collection_rect.has_point(pos):
+				_cancel_aim()
+				show_collection = true
+				_stop_audio()
 				_publish_state()
 			elif retry_rect.has_point(pos):
 				if free_play:
@@ -1516,13 +1609,14 @@ func _draw() -> void:
 	elif started:
 		_draw_score()
 		if retry_rect.size.x>0.0:
-			_action_button(retry_rect, _journey_entry_label() if free_play else ("庭で奏でる" if chapter_done else "月を中央へ戻す"),free_play)
+			_action_button(retry_rect, _journey_entry_label() if free_play else ("庭で月を奏でる" if chapter_done else "月を中央へ戻す"),free_play or chapter_done)
 		if next_rect.size.x>0.0:
-			_action_button(next_rect, "夜を変える" if free_play else ("庭で奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
+			_action_button(next_rect, "色と音色" if free_play else ("庭で月を奏でる" if chapter==CHAPTERS.size()-1 else "次の夜へ"), true)
+		if free_play:_action_button(collection_rect,"集めた夜")
 	else:
 		_draw_intro()
 	if transition_phase!=0:
-		var t := clampf(transition_time/(TRANSITION_OUT if transition_phase==1 else TRANSITION_IN),0.0,1.0)
+		var t := clampf(transition_time/(_transition_out_seconds() if transition_phase==1 else _transition_in_seconds()),0.0,1.0)
 		var ease := t*t*(3.0-2.0*t)
 		draw_rect(Rect2(Vector2.ZERO,size),Color(_tone_color("ink"),ease if transition_phase==1 else 1.0-ease))
 	if night_opening and reduced_motion and night_opening_time>=NIGHT_VIEW:
@@ -1530,6 +1624,7 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO,size),Color(_tone_color("ink"),sin(dissolve*PI)))
 	if show_help and started:
 		_draw_help()
+	if show_collection and started:_draw_collection()
 	if paused and started and not show_help:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.015, 0.03, 0.04, 0.78))
 		_text("ひと休み", Vector2(size.x * 0.5, size.y * 0.46), 38, _tone_color("gold"), true)
@@ -1540,6 +1635,7 @@ func _sky_position(index: int) -> Vector2:
 	if not free_play:
 		var group: Array = SKY.FIGURES[chapter]["goals"][index]
 		return sky_points[int(group[0])]
+	if garden_night>=0:return sky_points[index%sky_points.size()]
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
 	var span := minf(size.x * 0.60, 350.0)
 	var t := float(index) / float(maxi(1,count-1))
@@ -1551,6 +1647,39 @@ func _sky_position(index: int) -> Vector2:
 		wave = sin(t * TAU) * 9.0
 	return Vector2(size.x * 0.5 + (t - 0.5) * span, sky_y + wave)
 
+func _draw_collected_figure(index: int, points: Array, alpha: float) -> void:
+	for edge in SKY.FIGURES[index]["edges"]:
+		draw_line(points[int(edge[0])],points[int(edge[1])],Color(_tone_color("gold"),alpha),0.85,true)
+	for at in points:
+		draw_circle(at,1.8,Color(WHITE,minf(1.0,alpha+0.42)))
+
+func _draw_collection() -> void:
+	draw_rect(Rect2(Vector2.ZERO,size),Color(_tone_color("ink"),0.84))
+	_panel(collection_panel,Color(_tone_color("deep").darkened(0.30),0.96),Color(_tone_color("teal"),0.18),12.0)
+	_text("集めた夜",Vector2(size.x*0.5,collection_panel.position.y+42.0),28,_tone_color("gold"),true)
+	for row in range(collection_choices.size()):
+		var index := collection_choices[row]
+		var rect := collection_rows[row]
+		var chosen := index==garden_night
+		if chosen:_panel(rect,Color(_tone_color("teal"),0.075),Color(_tone_color("teal"),0.20),8.0)
+		var figure_rect := Rect2(rect.position+Vector2(15.0,9.0),Vector2(82.0,50.0))
+		if index>=0:
+			var fitted: Dictionary = SKY_SCENE.fit(index,figure_rect)
+			_draw_collected_figure(index,Array(fitted["points"]),0.58 if chosen else 0.27)
+		else:
+			var points := [figure_rect.get_center()+Vector2(-20,6),figure_rect.get_center()+Vector2(0,-7),figure_rect.get_center()+Vector2(20,4)]
+			for point in range(3):
+				if point>0:draw_line(points[point-1],points[point],Color(_tone_color("teal"),0.30),0.9,true)
+				draw_circle(points[point],2.0,_tone_color("gold") if chosen else MUTED)
+		var label: String = CHAPTERS[index]["name"] if index>=0 else "いつもの庭"
+		_text(label,rect.position+Vector2(116.0,38.0),22,_tone_color("gold") if chosen else WHITE)
+		var mark := rect.position+Vector2(rect.size.x-24.0,34.0)
+		draw_arc(mark,7.0,0,TAU,24,Color(_tone_color("gold"),0.75 if chosen else 0.18),1.0,true)
+		if chosen:draw_circle(mark,2.7,_tone_color("gold"))
+	if collection_choices.size()==1:
+		_text("星を灯すと、夜がここに残る。",Vector2(size.x*0.5,collection_close_rect.position.y-12.0),16,MUTED,true)
+	_action_button(collection_close_rect,"閉じる")
+
 func _draw_sky_constellation() -> void:
 	if not started:
 		return
@@ -1559,6 +1688,9 @@ func _draw_sky_constellation() -> void:
 		draw_set_transform(camera["offset"],0.0,Vector2.ONE*float(camera["scale"]))
 		_draw_night_stars()
 		draw_set_transform(_ground_camera_offset())
+		return
+	if garden_night>=0:
+		_draw_collected_figure(garden_night,sky_points,0.25)
 		return
 	var count: int = 7 if free_play else CHAPTERS[chapter]["targets"].size()
 	for i in range(count):
@@ -1660,6 +1792,17 @@ func _draw_light_flights() -> void:
 				draw_circle(_flight_point(start,finish,tail_t),2.8-float(i)*0.32,Color(0.96,0.85,0.61,0.8-float(i)*0.11))
 			_glow(_flight_point(start,finish,t),7.0,_tone_color("gold"),1.2)
 
+func _horizon_polygon(horizon: float, row: int, azimuth: float) -> PackedVector2Array:
+	# Close below every ridge, including when the horizon crosses the viewport edge.
+	var bottom := maxf(size.y,horizon+float(row)*14.0+20.0)
+	var points := PackedVector2Array([Vector2(-20.0,bottom)])
+	for i in range(27):
+		var x := size.x*float(i)/26.0
+		var y := horizon-8.0+float(row)*14.0+sin(float(i)*0.58+float(row)*1.9+deg_to_rad(azimuth))*12.0
+		points.append(Vector2(x,y))
+	points.append(Vector2(size.x+20.0,bottom))
+	return points
+
 func _draw_background() -> void:
 	draw_rect(Rect2(Vector2.ZERO,size),_tone_color("ink").lerp(_tone_color("deep"),garden_energy*0.10))
 	for i in range(20):
@@ -1671,19 +1814,14 @@ func _draw_background() -> void:
 	var camera := _sky_camera() if started and not free_play else {"offset":Vector2.ZERO,"scale":1.0}
 	draw_set_transform(camera["offset"],0.0,Vector2.ONE*float(camera["scale"]))
 	var ground_alpha := _night_pan()
-	var scene: Dictionary = SKY_SCENE.scene(chapter)
-	var horizon: float = SKY_SCENE.horizon(chapter,sky_fitted)
+	var scene: Dictionary = SKY_SCENE.scene(_scene_index())
+	var horizon: float = SKY_SCENE.horizon(_scene_index(),sky_fitted)
 	var summer: bool = scene["season"]=="summer"
 	# This distant horizon belongs to the same tangent plane as the stars.
 	# Close shore plants are a separate foreground, not a replacement horizon.
 	for row in range(3):
 		if horizon>size.y+60.0:break
-		var pts := PackedVector2Array([Vector2(-20.0, size.y)])
-		for i in range(27):
-			var x := size.x * float(i) / 26.0
-			var y := horizon - 8.0 + float(row)*14.0 + sin(float(i)*0.58+float(row)*1.9+deg_to_rad(float(scene["center_az"])))*12.0
-			pts.append(Vector2(x, y))
-		pts.append(Vector2(size.x + 20.0, size.y))
+		var pts := _horizon_polygon(horizon,row,float(scene["center_az"]))
 		draw_colored_polygon(pts,Color(_tone_color("deep").darkened(0.16+float(row)*0.15),ground_alpha))
 	if (summer or free_play) and horizon<size.y-160.0:
 		draw_rect(Rect2(0.0,horizon+18.0,size.x,size.y-horizon),Color(_tone_color("deep").darkened(0.19),ground_alpha))
@@ -1745,7 +1883,7 @@ func _draw_catalog_sky() -> void:
 	var camera := _sky_camera() if started and not free_play else {"offset":Vector2.ZERO,"scale":1.0}
 	draw_set_transform(camera["offset"],0.0,Vector2.ONE*float(camera["scale"]))
 	var viewport := Rect2(Vector2(-4,-4),size+Vector2(8,8))
-	for star in SKY_SCENE.scene(chapter)["neighbors"]:
+	for star in SKY_SCENE.scene(_scene_index())["neighbors"]:
 		var pos := SKY_SCENE.point(star,sky_fitted)
 		if not viewport.has_point(pos*float(camera["scale"])+camera["offset"]):continue
 		var brightness := pow(10.0,-0.22*(float(star[3])+1.5))
@@ -1753,9 +1891,9 @@ func _draw_catalog_sky() -> void:
 	_draw_sky_moon()
 
 func _draw_sky_moon() -> void:
-	if not SKY_SCENE.moon_visible(chapter):return
-	var moon: Dictionary = SKY_SCENE.scene(chapter)["moon"]
-	var pos := SKY_SCENE.moon_point(chapter,sky_fitted)
+	if not SKY_SCENE.moon_visible(_scene_index()):return
+	var moon: Dictionary = SKY_SCENE.scene(_scene_index())["moon"]
+	var pos := SKY_SCENE.moon_point(_scene_index(),sky_fitted)
 	var radius := float(moon["radius"])*float(sky_fitted["scale"])/float(moon["front"])
 	_glow(pos,radius*1.8,Color("cfdeea"),float(moon["illum"])*0.18)
 	draw_circle(pos,radius,Color(0.6,0.72,0.8,0.06))
@@ -1773,7 +1911,7 @@ func _draw_sky_moon() -> void:
 
 func _draw_moon_reflection(visibility: float) -> void:
 	var clock := 0.0 if reduced_motion else elapsed
-	for glint in SKY_SCENE.reflection(chapter,sky_fitted,size.y-160.0):
+	for glint in SKY_SCENE.reflection(_scene_index(),sky_fitted,size.y-160.0):
 		var pos: Vector2 = glint["pos"]
 		var row: int = glint["row"]
 		var phase := clock*0.26+float(row)*1.87
@@ -1805,6 +1943,7 @@ func _draw_header() -> void:
 		_button(mute_rect, "音 OFF" if muted else "音 ON")
 		_button(help_rect, "？")
 		_pause_button()
+		if chapter_done and not free_play:_text("完成した曲を聴く",Vector2(28.0,100.0),17,MUTED)
 		if reset_rect.size.x>0.0 and not night_opening:
 			_button(reset_rect,GRAVITY_NAMES[gravity_index] if free_play else "庭へ")
 
@@ -1825,15 +1964,8 @@ func _draw_stage() -> void:
 	var arc_color := Color(0.38, 0.6, 0.59, 0.14)
 	draw_arc(pivot, length, PI * 0.5 - MAX_PULL, PI * 0.5 + MAX_PULL, 80, arc_color, 1.3, true)
 	draw_arc(pivot, length + 32.0, PI * 0.5 - 1.10, PI * 0.5 + 1.10, 60, Color(0.35, 0.56, 0.57, 0.055), 1.0, true)
-	# Architectural frame: an open shrine, a fine brass crossbar and hanging bells.
-	var top_y := pivot.y - 28.0
-	var half_width := minf(size.x * 0.38, length * 0.90)
-	for side in [-1.0, 1.0]:
-		var x: float = pivot.x + side * half_width
-		draw_line(Vector2(x, top_y + 21), Vector2(x, pivot.y + length + 42), Color("183c45"), 8.0)
-		draw_line(Vector2(x - side * 7, top_y + 25), Vector2(x - side * 7, pivot.y + length + 40), Color("2c4b4d"), 1.0)
-	draw_line(Vector2(pivot.x - half_width - 16, top_y + 13), Vector2(pivot.x + half_width + 16, top_y + 13), Color("294649"), 7.0)
-	draw_line(Vector2(pivot.x - half_width - 16, top_y + 9), Vector2(pivot.x + half_width + 16, top_y + 9), Color("718779"), 1.2)
+	# The silhouette stays fixed; only the metal finish and shallow engraving vary.
+	INSTRUMENT.frame(self,pivot,length,size.x,_instrument_index())
 	for i in range(7):
 		var pos := _point(float(BELL_ANGLES[i]), length + 15.0)
 		var glow: float = bell_glows[i]
@@ -1841,9 +1973,7 @@ func _draw_stage() -> void:
 		pos.x += bob
 		draw_line(Vector2(pos.x, pos.y - 50.0), Vector2(pos.x, pos.y - 13.0), Color(0.31, 0.47, 0.49, 0.50), 1.0)
 		_glow(pos, 12.0 + glow * 7.0, _tone_color("teal"), glow * 3.0)
-		var points := PackedVector2Array([pos + Vector2(-8,-11), pos + Vector2(8,-11), pos + Vector2(11,7), pos + Vector2(-11,7)])
-		draw_colored_polygon(points, Color("446a6b").lerp(_tone_color("teal"), glow))
-		draw_line(pos + Vector2(-11,7), pos + Vector2(11,7), Color("a9b69b").lerp(WHITE, glow), 1.5)
+		INSTRUMENT.bell(self,pos,_instrument_index(),i,glow,_tone_color("teal"),WHITE)
 		draw_circle(pos + Vector2(0,10), 2.0, _tone_color("gold"))
 		if _pitch_labels_visible():
 			_text(_bell_name(i), pos + Vector2(0, 35), 11, MUTED, true)
@@ -1946,7 +2076,8 @@ func _draw_feedback() -> void:
 
 func _draw_score() -> void:
 	if free_play:
-		_text(PALETTES[palette_index]["name"],Vector2(size.x*0.5,size.y-137.0),18,_tone_color("gold"),true)
+		var name: String = CHAPTERS[garden_night]["name"] if garden_night>=0 else PALETTES[palette_index]["name"]
+		_text(name,Vector2(size.x*0.5,size.y-137.0),18,_tone_color("gold"),true)
 		_draw_feedback()
 		return
 	var line_y := size.y - 140.0
@@ -1998,6 +2129,9 @@ func _draw_help() -> void:
 		lines[1] = "月を引いて放すと、鐘が歌う。"
 		lines[2] = "左上の重力で、振れ方を奏で分けよう。"
 		lines[5] = "右下で夜の色と、響きの手触りが変わる。"
+		lines[6] = "集めた夜から、星を灯した夜を選べる。"
+	if chapter_done and not free_play:
+		lines = ["星座が完成した夜の曲を聴く。","この夜の響きは、好きなだけ続く。","月を引いて奏でるときは、庭へ。","音と休止は、右上のボタンから。"]
 	for i in range(lines.size()):
 		_text(lines[i],Vector2(cx,y+54.0+float(i)*(34.0 if free_play else 32.0)),20 if free_play else 18,WHITE,true)
 	_text("タップして閉じる",Vector2(cx,y+(440.0 if free_play else 390.0)),17,MUTED,true)
@@ -2035,6 +2169,7 @@ func _load_save() -> void:
 			if int(best_chapters[i])>0 and _checkpoint_number(stored_best,0,1e7,true):best_casts[i] = int(stored_best)
 		var listening = _validated_listening(config.get_value("music","listening",{}),best_chapters)
 		listening_resume = listening if listening is Dictionary else {}
+		garden_night = _validated_garden_night(config.get_value("settings","garden_night",-1),best_chapters)
 
 func _validated_listening(value: Variant, best: Array) -> Variant:
 	if not value is Dictionary:
@@ -2112,6 +2247,7 @@ func _config_from_checkpoint(data: Variant) -> ConfigFile:
 	config.set_value("settings","muted",data["muted"])
 	config.set_value("settings","palette",int(data["palette"]))
 	config.set_value("settings","gravity",int(gravity))
+	config.set_value("settings","garden_night",_validated_garden_night(data.get("gardenNight",-1),best))
 	config.set_value("journey","resume",clean_journey)
 	config.set_value("garden","scene",clean_garden)
 	config.set_value("music","listening",listening)
@@ -2131,6 +2267,8 @@ func _save() -> void:
 	if free_play:
 		saved_gravity_index = gravity_index
 	config.set_value("settings","gravity",saved_gravity_index)
+	var saved_night: int = transition_chapter if transition_phase!=0 and transition_action=="collection" else garden_night
+	config.set_value("settings","garden_night",saved_night)
 	if transition_phase==1 and not transition_resume.is_empty():
 		journey_resume = transition_resume.duplicate()
 	elif started and not free_play:
@@ -2149,11 +2287,11 @@ func _save() -> void:
 	if OS.has_feature("web"):
 		# A versioned JSON checkpoint contains only the small game-state schema.
 		# Storage may be blocked by browser policy; keep filesystem saving intact.
-		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"journey":journey_resume,"garden":garden_scene,"best":best_chapters,"bestCasts":best_casts,"listening":listening_resume}
+		var checkpoint := {"version":1,"revision":save_revision,"muted":muted,"palette":palette_index,"gravity":saved_gravity_index,"gardenNight":saved_night,"journey":journey_resume,"garden":garden_scene,"best":best_chapters,"bestCasts":best_casts,"listening":listening_resume}
 		JavaScriptBridge.eval("(function(){try{window.localStorage.setItem("+JSON.stringify(WEB_SAVE_KEY)+","+JSON.stringify(JSON.stringify(checkpoint))+");}catch(e){}})()")
 
 func _sky_scene_state(camera: Dictionary) -> Dictionary:
-	var scene: Dictionary = SKY_SCENE.scene(chapter)
+	var scene: Dictionary = SKY_SCENE.scene(_scene_index())
 	var catalog: Array = []
 	var visible := Rect2(Vector2.ZERO,size)
 	for row in scene["neighbors"]:
@@ -2167,18 +2305,19 @@ func _sky_scene_state(camera: Dictionary) -> Dictionary:
 		var row: Array = scene["targets"][i]
 		targets.append({"hr":int(row[0]),"pos":[pos.x,pos.y],"az":row[4],"alt":row[5]})
 	var moon: Dictionary = scene["moon"]
-	var moon_pos: Vector2 = SKY_SCENE.moon_point(chapter,sky_fitted)*float(camera["scale"])+camera["offset"]
+	var moon_pos: Vector2 = SKY_SCENE.moon_point(_scene_index(),sky_fitted)*float(camera["scale"])+camera["offset"]
 	var reflection: Array = []
-	for glint in SKY_SCENE.reflection(chapter,sky_fitted,size.y-160.0):
+	for glint in SKY_SCENE.reflection(_scene_index(),sky_fitted,size.y-160.0):
 		var pos: Vector2 = glint["pos"]*float(camera["scale"])+camera["offset"]
 		if visible.has_point(pos):reflection.append([pos.x,pos.y,glint["strength"]])
-	return {"observer":SKY_SCENE.DATA.OBSERVER,"local":scene["local"],"season":scene["season"],"az":scene["center_az"],"alt":scene["center_alt"],"sunAlt":scene["sun_alt"],"horizon":SKY_SCENE.horizon(chapter,sky_fitted)*float(camera["scale"])+camera["offset"].y,"projectionScale":float(sky_fitted["scale"])*float(camera["scale"]),"targets":targets,"catalog":catalog,"skyMoon":{"az":moon["az"],"alt":moon["alt"],"illum":moon["illum"],"pos":[moon_pos.x,moon_pos.y],"aboveHorizon":float(moon["alt"])>0.0,"inFrame":SKY_SCENE.moon_visible(chapter) and visible.has_point(moon_pos)},"reflection":reflection,"snow":12 if scene["season"]=="winter" else 0,"decorativeClock":0.0 if reduced_motion else elapsed}
+	return {"observer":SKY_SCENE.DATA.OBSERVER,"local":scene["local"],"season":scene["season"],"az":scene["center_az"],"alt":scene["center_alt"],"sunAlt":scene["sun_alt"],"horizon":SKY_SCENE.horizon(_scene_index(),sky_fitted)*float(camera["scale"])+camera["offset"].y,"projectionScale":float(sky_fitted["scale"])*float(camera["scale"]),"targets":targets,"catalog":catalog,"skyMoon":{"az":moon["az"],"alt":moon["alt"],"illum":moon["illum"],"pos":[moon_pos.x,moon_pos.y],"aboveHorizon":float(moon["alt"])>0.0,"inFrame":SKY_SCENE.moon_visible(_scene_index()) and visible.has_point(moon_pos)},"reflection":reflection,"snow":12 if scene["season"]=="winter" else 0,"decorativeClock":0.0 if reduced_motion else elapsed}
 
 func _publish_state() -> void:
 	# A read-only public QA snapshot. It cannot alter gameplay or storage.
 	if OS.has_feature("web"):
 		var state := {"started":started,"chapter":chapter,"kind":_goal_kind(),"palette":palette_index,"gravity":gravity_index,"energy":garden_energy,"progress":progress,"casts":casts,"launch":cast_start_angle,"complete":chapter_done,"freePlay":free_play,"muted":muted,"paused":paused,"help":show_help,"transition":transition_phase,"saveRevision":save_revision,"build":BUILD.COMMIT,"engine":Engine.get_version_info()["string"]}
 		state["music"] = night_music.snapshot()
+		state["collection"] = {"open":show_collection,"night":garden_night,"choices":collection_choices.duplicate(),"entry":[collection_rect.get_center().x,collection_rect.get_center().y],"rows":collection_rows.map(func(rect):return [rect.get_center().x,rect.get_center().y]),"close":[collection_close_rect.get_center().x,collection_close_rect.get_center().y],"harmony":_harmony_index(),"instrument":_instrument_index()}
 		state["feedback"] = {"text":feedback,"remaining":feedback_timer,"alpha":_feedback_alpha(),"previous":{"text":feedback_previous,"alpha":_previous_feedback_alpha()},"crossfade":feedback_blend,"hold":feedback_hold,"fade":_feedback_fade_seconds()}
 		state["goalPairs"] = cast_goal_hits.duplicate(true)
 		state["lit"] = lit_goals.duplicate()
