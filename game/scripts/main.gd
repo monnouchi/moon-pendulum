@@ -46,6 +46,7 @@ const COMPLETION_TRACE_SECONDS = 2.4
 const COMPLETION_SHIMMER_SECONDS = 1.2
 const COMPLETION_AFTERGLOW_SECONDS = 1.6
 const COMPLETION_SHIMMER_REDUCED = 1.8
+const COMPLETION_FOCUS_RISE = 0.55
 const FEEDBACK_CROSSFADE = 0.30
 const COLLECTION_FADE_SECONDS = 0.55
 const COLLECTION_FADE_REDUCED = 0.22
@@ -701,12 +702,13 @@ func _echo_physics(delta: float) -> void:
 func _draw_echoes() -> void:
 	if not started:
 		return
+	var stage_gain := _completion_stage_gain()
 	for e in echoes:
 		var side: int = e["side"]
 		var ep := _echo_pivot(side)
 		var el := _echo_length()
 		var bob := ep + Vector2(sin(float(e["theta"])), cos(float(e["theta"]))) * el
-		var glow: float = e["glow"]
+		var glow: float = float(e["glow"])*stage_gain
 		var feed := _point(-0.66 if side == 0 else 0.66, length + 15.0)
 		var wire_color := _tone_color("gold") if e["charged"] else Color("355358")
 		draw_line(feed, ep + Vector2(0.0, el + 20.0), Color(wire_color, 0.55), 1.0, true)
@@ -740,6 +742,7 @@ func _signal_echo_transfer(side: int, kind: String) -> void:
 	echo_transfers.append({"side":side,"kind":kind,"age":0.0})
 
 func _draw_echo_signals(side: int) -> void:
+	var stage_gain := _completion_stage_gain()
 	var ep := _echo_pivot(side)
 	var el := _echo_length()
 	var rest := ep+Vector2(0.0,el)
@@ -747,20 +750,21 @@ func _draw_echo_signals(side: int) -> void:
 		if int(effect["side"])!=side:continue
 		var t := clampf(float(effect["age"])/ECHO_SIGNAL_SECONDS,0.0,1.0)
 		var fade := 1.0-t*t*(3.0-2.0*t)
+		var light_fade := fade*stage_gain
 		var old_angle: float = effect["angle"]
 		var returning := old_angle if reduced_motion else old_angle*fade
 		if absf(old_angle)>0.02:
-			draw_arc(ep,el,PI*0.5-maxf(old_angle,0.0),PI*0.5-minf(old_angle,0.0),24,Color(WHITE,0.28*fade),1.2,true)
+			draw_arc(ep,el,PI*0.5-maxf(old_angle,0.0),PI*0.5-minf(old_angle,0.0),24,Color(WHITE,0.28*light_fade),1.2,true)
 			if not reduced_motion:
 				var glint := _echo_point(side,returning)
-				_glow(glint,4.0,WHITE,0.65*fade)
-				draw_circle(glint,1.7,Color(WHITE,0.72*fade))
-		draw_arc(rest,14.0,0.0,TAU,32,Color(WHITE,0.48*fade),1.2,true)
-		_glow(rest,13.0,WHITE,0.55*fade)
+				_glow(glint,4.0,WHITE,0.65*light_fade)
+				draw_circle(glint,1.7,Color(WHITE,0.72*light_fade))
+		draw_arc(rest,14.0,0.0,TAU,32,Color(WHITE,0.48*light_fade),1.2,true)
+		_glow(rest,13.0,WHITE,0.55*light_fade)
 	for effect in echo_transfers:
 		if int(effect["side"])!=side:continue
 		var t := clampf(float(effect["age"])/ECHO_SIGNAL_SECONDS,0.0,1.0)
-		var fade := 1.0-t*t*(3.0-2.0*t)
+		var fade := (1.0-t*t*(3.0-2.0*t))*stage_gain
 		var charging := str(effect["kind"])=="charge"
 		var path := PackedVector2Array([
 			_point((-0.66 if side==0 else 0.66) if charging else 0.0,length+15.0),
@@ -845,6 +849,14 @@ func _music_layer_mask() -> Array[bool]:
 func _coda_light() -> float:
 	return 0.42+float(_completion_visual_state()["shimmer"])*0.35
 
+func _completion_focus() -> float:
+	if not started or free_play or not chapter_done:return 0.0
+	var hold := COMPLETION_SHIMMER_REDUCED if reduced_motion else COMPLETION_TRACE_SECONDS+COMPLETION_SHIMMER_SECONDS
+	return smoothstep(0.0,COMPLETION_FOCUS_RISE,finish_time)*(1.0-smoothstep(hold,hold+COMPLETION_AFTERGLOW_SECONDS,finish_time))
+
+func _completion_stage_gain() -> float:
+	return 1.0-_completion_focus()*0.82
+
 func _completion_visual_state() -> Dictionary:
 	var tracing := 0.0 if reduced_motion else COMPLETION_TRACE_SECONDS
 	var shimmering := COMPLETION_SHIMMER_REDUCED if reduced_motion else COMPLETION_SHIMMER_SECONDS
@@ -858,7 +870,7 @@ func _completion_visual_state() -> Dictionary:
 	var cursor := trace*float(edges)
 	var phase := "settled" if complete else "none"
 	if active:phase = "trace" if finish_time<tracing else ("shimmer" if finish_time<tracing+shimmering else "afterglow")
-	return {"active":active,"phase":phase,"time":finish_time,"trace":trace,"shimmer":shimmer,"afterglow":tail,"reducedMotion":reduced_motion,"edgesComplete":mini(edges,int(cursor)),"currentEdge":int(cursor) if active and not reduced_motion and cursor<float(edges) else -1,"edgeProgress":cursor-floorf(cursor)}
+	return {"active":active,"phase":phase,"time":finish_time,"trace":trace,"shimmer":shimmer,"afterglow":tail,"focus":_completion_focus(),"stageGain":_completion_stage_gain(),"reducedMotion":reduced_motion,"edgesComplete":mini(edges,int(cursor)),"currentEdge":int(cursor) if active and not reduced_motion and cursor<float(edges) else -1,"edgeProgress":cursor-floorf(cursor)}
 
 func _harmony_index() -> int:
 	return maxi(0,garden_night) if free_play else chapter
@@ -1376,6 +1388,7 @@ func _toggle_mute() -> void:
 	muted = not muted
 	if muted:
 		_stop_audio()
+		night_music.retire_landing()
 	_save()
 	_publish_state()
 
@@ -1776,11 +1789,14 @@ func _sky_star_lit(index: int) -> bool:
 func _draw_night_stars() -> void:
 	var figure: Dictionary = SKY.FIGURES[chapter]
 	var celebration := _completion_visual_state()
-	var star_light := 0.42+float(celebration["shimmer"])*0.35 if chapter_done else 1.0
+	var focus := float(celebration["focus"])
+	var arrival := smoothstep(0.0,COMPLETION_FOCUS_RISE,finish_time) if chapter_done else 0.0
+	var star_light := lerpf(1.0,0.42,arrival)+focus*0.65+float(celebration["shimmer"])*0.10
+	var light := _tone_color("gold").lerp(WHITE,focus*0.22)
 	for edge in figure["edges"]:
 		var connected := _sky_star_lit(int(edge[0])) and _sky_star_lit(int(edge[1]))
-		var color := Color(_tone_color("gold"),0.36 if chapter_done else 0.19) if connected else Color(_tone_color("teal"),0.065)
-		draw_line(sky_points[int(edge[0])],sky_points[int(edge[1])],color,0.85,true)
+		var color := Color(light,lerpf(0.19,0.36,arrival)+focus*0.20) if connected else Color(_tone_color("teal"),0.065)
+		draw_line(sky_points[int(edge[0])],sky_points[int(edge[1])],color,0.85+focus*0.35,true)
 	for index in range(sky_points.size()):
 		var pos := sky_points[index]
 		var goal := _sky_star_goal(index)
@@ -1788,12 +1804,13 @@ func _draw_night_stars() -> void:
 		if goal>=0 and not earned:
 			draw_arc(pos,3.5,0,TAU,16,Color(_tone_color("teal"),0.31),0.7,true)
 		elif earned:
-			_glow(pos,5.0,_tone_color("gold"),star_light*1.2 if chapter_done else 1.0)
-			draw_circle(pos,2.0,_tone_color("gold"))
-			draw_line(pos-Vector2(4,0),pos+Vector2(4,0),Color(_tone_color("gold"),0.55),0.75,true)
-			draw_line(pos-Vector2(0,4),pos+Vector2(0,4),Color(_tone_color("gold"),0.55),0.75,true)
+			_glow(pos,5.0,light,lerpf(1.0,star_light*1.2,arrival))
+			draw_circle(pos,2.0+focus*0.30,light)
+			var half := 4.0+focus*1.4
+			draw_line(pos-Vector2(half,0),pos+Vector2(half,0),Color(light,0.55+focus*0.20),0.75,true)
+			draw_line(pos-Vector2(0,half),pos+Vector2(0,half),Color(light,0.55+focus*0.20),0.75,true)
 		else:
-			draw_circle(pos,1.75,Color(WHITE,0.76 if chapter_done else 0.52))
+			draw_circle(pos,1.75+focus*0.45,Color(WHITE,lerpf(0.52,0.76,arrival)+focus*0.20))
 	_draw_completion_constellation(celebration)
 
 func _draw_completion_constellation(celebration: Dictionary) -> void:
@@ -1955,7 +1972,7 @@ func _draw_background() -> void:
 					c.a = level*(0.15-float(j)*0.026)
 					draw_line(pos+Vector2(-half,float(j)*8.0),pos+Vector2(half,float(j)*8.0),c,1.0,true)
 	elif chapter_done:
-		var bloom := _coda_light()
+		var bloom := _coda_light()*_completion_stage_gain()
 		var reflection := Vector2(size.x*0.5,response_y+28.0)
 		for j in range(5):
 			var half := 18.0+float(j)*15.0
@@ -2058,6 +2075,7 @@ func _pitch_labels_visible() -> bool:
 	return started and _moon_hint().is_empty()
 
 func _draw_stage() -> void:
+	var stage_gain := _completion_stage_gain()
 	var arc_color := Color(0.38, 0.6, 0.59, 0.14)
 	draw_arc(pivot, length, PI * 0.5 - MAX_PULL, PI * 0.5 + MAX_PULL, 80, arc_color, 1.3, true)
 	draw_arc(pivot, length + 32.0, PI * 0.5 - 1.10, PI * 0.5 + 1.10, 60, Color(0.35, 0.56, 0.57, 0.055), 1.0, true)
@@ -2065,7 +2083,7 @@ func _draw_stage() -> void:
 	INSTRUMENT.frame(self,pivot,length,size.x,_instrument_index())
 	for i in range(7):
 		var pos := _point(float(BELL_ANGLES[i]), length + 15.0)
-		var glow: float = bell_glows[i]
+		var glow: float = bell_glows[i]*stage_gain
 		var bob := 0.0 if reduced_motion else sin(elapsed * 4.0 + float(i)) * glow * 4.0
 		pos.x += bob
 		draw_line(Vector2(pos.x, pos.y - 50.0), Vector2(pos.x, pos.y - 13.0), Color(0.31, 0.47, 0.49, 0.50), 1.0)
@@ -2091,22 +2109,22 @@ func _draw_stage() -> void:
 
 	for i in range(1, trail.size()):
 		var c := _tone_color("gold")
-		c.a = float(i)/float(trail.size())*0.26
+		c.a = float(i)/float(trail.size())*0.26*stage_gain
 		draw_line(trail[i-1],trail[i],c,1.0+float(i)/float(trail.size())*2.1)
 	for r in ripples:
 		var c := _tone_color("teal")
-		c.a = maxf(0.0, 1.0 - float(r["age"]) / 2.2) * 0.26
+		c.a = maxf(0.0, 1.0 - float(r["age"]) / 2.2) * 0.26*stage_gain
 		draw_arc(r["pos"], 8.0 + float(r["age"]) * 45.0, 0, TAU, 32, c, 1.0, true)
 	var moon_angle := theta if started else _intro_angle()
 	var moon := _point(moon_angle)
-	_draw_moon(pivot,moon,moon_angle,_moon_radius(),_tone_color("gold"),1.4,Color("86aaa2"))
+	_draw_moon(pivot,moon,moon_angle,_moon_radius(),_tone_color("gold"),1.4*stage_gain,Color("86aaa2"))
 	draw_circle(pivot, 6.0, _tone_color("gold"))
 	draw_circle(pivot, 2.0, INK)
 	if dragging:
 		draw_arc(moon, 38.0, 0, TAU, 48, Color(0.64,0.89,0.82,0.4), 1.0, true)
 	for p in particles:
 		var c: Color = p["color"]
-		c.a = clampf(float(p["life"]), 0.0, 1.0) * 0.8
+		c.a = clampf(float(p["life"]), 0.0, 1.0) * 0.8*stage_gain
 		draw_circle(p["pos"], 1.8, c)
 
 func _completion_feedback_fade_seconds() -> float:

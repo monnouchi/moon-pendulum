@@ -1423,6 +1423,115 @@ func run() -> void:
 		game._input(hud_tap)
 		check(game.transition_phase==1 and game.transition_action=="garden","Fully visible completion navigation remains usable in all five nights")
 		advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+game.TRANSITION_IN+0.02)
+	# Completion gets a brief contrast while motion, tails and later play remain live.
+	game.transition_phase = 0
+	game.paused = false
+	game.show_help = false
+	game.show_collection = false
+	game.collection_opacity = 0.0
+	for gentle in [false,true]:
+		game.reduced_motion = gentle
+		for night in range(5):
+			game._stop_audio(true)
+			game.muted = false
+			game._new_chapter(night)
+			game.casts = 2
+			game._process(0.05)
+			check(game._completion_focus()==0.0 and game._completion_stage_gain()==1.0,"An unfinished night keeps its ordinary instrumental light")
+			for goal in range(game.lit_goals.size()-1):game._award_goal(0.0,game._point(0.0),goal)
+			var retained_notes: Array = []
+			for slot in range(16):
+				if game.night_music.players[slot].playing and game.night_music.voices[slot]["generation"]==game.night_music.generation:
+					retained_notes.append([slot,playback_id(game.night_music.players[slot])])
+			game._award_goal(0.0,game._point(0.0),game.lit_goals.size()-1)
+			check(game._completion_focus()==0.0 and game._completion_stage_gain()==1.0,"The completion focus starts at the current light without an abrupt cut")
+			var natural_tails := true
+			for note_record in retained_notes:
+				natural_tails = natural_tails and game.night_music.players[note_record[0]].playing and playback_id(game.night_music.players[note_record[0]])==note_record[1]
+			check(natural_tails,"The completion tonic leaves already ringing score notes on their original playback")
+			var tonic_ok := false
+			for slot in range(16):
+				if game.night_music.voices[slot]["role"]=="landing" and game.night_music.voices[slot]["generation"]==game.night_music.generation:
+					tonic_ok = absf(game.night_music.players[slot].pitch_scale-pow(2.0,float(game.HARMONY.NIGHTS[night]["bells"][0]-50)/12.0))<0.00001 and game.night_music.players[slot].volume_db<=-26.0
+			check(tonic_ok and game.night_music.landing_notes==1 and game.night_music.bass_entries==1,"Every completed night lands on its own quiet tonic once with the existing sustained bass")
+			var score_clock: float = game.night_music.time
+			var phrase_count: int = game.night_music.phrase_notes
+			advance_for(0.275)
+			check(game._completion_focus()>0.0 and game._completion_focus()<1.0 and game._completion_stage_gain()>0.18 and game._completion_stage_gain()<1.0,"Instrumental lights move smoothly into the constellation focus")
+			advance_for(0.30)
+			check(game._completion_focus()==1.0 and is_equal_approx(game._completion_stage_gain(),0.18),"The completed constellation has a clear interval of quieter peripheral light")
+			check(is_equal_approx(game.night_music.time,score_clock) and game.night_music.phrase_notes==phrase_count and game.night_music.snapshot()["audibleVoices"]>0,"The short musical breath stops new score attacks while retaining an audible arrival and its tails")
+			var held_breath: float = game.night_music.completion_breath
+			var held_focus: float = game._completion_focus()
+			game.paused = true
+			game._process(0.4)
+			check(game.night_music.completion_breath==held_breath and game._completion_focus()==held_focus,"Pause preserves both the visual focus and the unfinished musical breath")
+			game.paused = false
+			game.show_help = true
+			game._process(0.4)
+			check(game.night_music.completion_breath==held_breath and game._completion_focus()==held_focus,"Help preserves the same completion interval")
+			game.show_help = false
+			game._begin_pull(game._point(0.0))
+			check(game.dragging,"The moon remains immediately touchable during the completion focus")
+			game._set_pull_angle(0.9)
+			game._release()
+			game._play_coda()
+			game.night_music.unlock(game.night_music.pieces,true)
+			check(game.casts==2 and game.night_music.completion_breath==held_breath and game.night_music.landing_notes==1,"Playing and repeated completion calls cannot restart the arrival or its short rest")
+			advance_for(2.0)
+			check(game.night_music.completion_breath==0.0 and game.night_music.time>score_clock,"The continuing score resumes after the brief arrival")
+			var previous_gain: float = game._completion_stage_gain()
+			var smooth_return := true
+			for tick in range(360):
+				game._process(1.0/60.0)
+				var current_gain: float = game._completion_stage_gain()
+				smooth_return = smooth_return and current_gain>=previous_gain-0.000001 and current_gain<=1.0 and current_gain>=0.18-0.000001 and absf(current_gain-previous_gain)<0.04
+				previous_gain = current_gain
+			check(smooth_return and game._completion_stage_gain()==1.0,"The instrumental light returns gradually to its ordinary settled state")
+			check(game.night_music.phrase_notes>phrase_count and game.night_music.landing_notes==1 and game.players.size()==12 and game.night_music.players.size()==16,"Full accompaniment continues without extra arrivals or additional audio players")
+			game._enter_garden(false)
+			game.listening_resume = {"chapter":night,"casts":2,"perfects":2}
+			game._return_to_journey()
+			check(game._completion_focus()==0.0 and game._completion_stage_gain()==1.0 and game.night_music.completion_breath==0.0 and game.night_music.landing_notes==0,"Completed-score restoration skips the focus, tonic arrival and musical rest")
+	game.reduced_motion = false
+	for night in range(5):
+		game._stop_audio(true)
+		game.muted = true
+		game._new_chapter(night)
+		advance_for(0.4)
+		for goal in range(game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+		advance_for(2.0)
+		check(game.night_music.landing_notes==0 and game.night_music.completion_breath==0.0 and game.night_music.snapshot()["audibleVoices"]==0,"Muted completion spends its brief rest silently without queuing a late arrival")
+		game._toggle_mute()
+		advance_for(0.3)
+		check(game.night_music.landing_notes==0 and game.night_music.bass_entries==0,"Unmuting a completed night resumes its score without replaying a reward tone")
+	for quick_return in [false,true]:
+		for night in range(5):
+			game._stop_audio(true)
+			game.muted = false
+			game._new_chapter(night)
+			advance_for(0.1)
+			for goal in range(game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+			advance_for(0.2)
+			var arrival_slot := -1
+			for slot in range(16):
+				if game.night_music.voices[slot]["role"]=="landing" and game.night_music.voices[slot]["generation"]==game.night_music.generation:
+					arrival_slot = slot
+			game._toggle_mute()
+			check(arrival_slot>=0 and game.night_music.voices[arrival_slot]["after"]=="stop" and game.night_music.voices[arrival_slot]["tail"],"Muting the arrival retires its short one-shot through a fade")
+			advance_for(0.03 if quick_return else 2.0)
+			game._toggle_mute()
+			advance_for(0.12)
+			check(not game.night_music.players[arrival_slot].playing and not game.night_music.players[arrival_slot].stream_paused and game.night_music.landing_notes==1,"Neither a quick nor a later unmute revives the retired completion tone")
+	game._new_chapter(0)
+	game.muted = false
+	game._process(0.1)
+	for goal in range(game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+	advance_for(0.4)
+	game._request_transition("chapter",1)
+	check(game.night_music.completion_breath==0.0,"Leaving during the arrival retires its short rest instead of carrying it into another night")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.03)
+	check(game.chapter==1 and not game.chapter_done and game._completion_stage_gain()==1.0 and game.night_music.landing_notes==0,"A new night has its ordinary light and its own score after a interrupted arrival")
 	print("PASS: %d gameplay checks, all 11 constellation goals / 15 lights across 5 nights" % checks)
 	game.paused = true
 	game._stop_audio(true)

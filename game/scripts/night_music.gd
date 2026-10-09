@@ -3,6 +3,7 @@ extends Node
 const VOICES = 16
 const BASS_LOOP_BEGIN = 30000
 const BASS_LOOP_END = 90000
+const COMPLETION_BREATH_SECONDS = 1.8
 const SCORES = preload("res://scripts/night_harmony.gd").NIGHTS
 var players: Array[AudioStreamPlayer] = []
 var applied_db: Array[float] = []
@@ -24,6 +25,8 @@ var duck_gain := 1.0
 var duck_hold := 0.0
 var completion_starts := 0
 var bass_entries := 0
+var landing_notes := 0
+var completion_breath := 0.0
 var replies := 0
 var phrase_notes := 0
 var reply_cast := -1
@@ -73,6 +76,8 @@ func begin(index: int, restored_pieces: int = 0, restored_complete: bool = false
 	enabled = false
 	completion_starts = 0
 	bass_entries = 0
+	landing_notes = 0
+	completion_breath = 0.0
 	replies = 0
 	phrase_notes = 0
 	reply_cast = -1
@@ -80,6 +85,7 @@ func begin(index: int, restored_pieces: int = 0, restored_complete: bool = false
 
 func leave(duration: float) -> void:
 	leaving = true
+	completion_breath = 0.0
 	for index in range(players.size()):
 		var voice: Dictionary = voices[index]
 		if not _active(players[index]):
@@ -103,6 +109,7 @@ func _set_layers(count: int, mask: Variant = null) -> void:
 func restore(count: int, finished: bool, mask: Variant = null) -> void:
 	_set_layers(count,mask)
 	completed = finished
+	completion_breath = 0.0
 
 func _exit_tree() -> void:
 	for player in players:
@@ -135,7 +142,7 @@ func unlock(count: int, finished: bool, paired: bool = false, mask: Variant = nu
 		return
 	var previous := active_layers.duplicate()
 	_set_layers(maxi(pieces,count),mask)
-	if enabled and not paired:
+	if enabled and not paired and not finished:
 		for layer in range(active_layers.size()):
 			if not active_layers[layer] or previous[layer]:continue
 			var first: Array = SCORES[night]["layers"][layer][0]
@@ -143,8 +150,13 @@ func unlock(count: int, finished: bool, paired: bool = false, mask: Variant = nu
 	if finished and not completed:
 		completed = true
 		completion_starts += 1
+		completion_breath = COMPLETION_BREATH_SECONDS
 		if enabled:
 			_start_bass(true)
+			# One quiet tonic replaces the last high reply. Existing notes decay
+			# naturally while new score attacks leave room for the arrival.
+			_play(instruments[night][0],int(SCORES[night]["bells"][0]),50,0.50,-20.0,"landing")
+			landing_notes += 1
 
 func reply(cast: int, side: int) -> void:
 	if night<0 or leaving or completed:
@@ -164,12 +176,23 @@ func clear_replies() -> void:
 		if _active(players[index]) and voices[index]["role"]=="reply" and int(voices[index]["generation"])==generation:
 			_tween(index,0.0,0.12,"stop")
 
+func retire_landing() -> void:
+	# A muted one-shot must not return as a late reward on unmute.
+	for index in range(players.size()):
+		if _active(players[index]) and voices[index]["role"]=="landing" and int(voices[index]["generation"])==generation:
+			voices[index]["tail"] = true
+			_tween(index,0.0,0.08,"stop")
+
 func duck() -> void:
 	duck_gain = minf(duck_gain,0.72)
 	duck_hold = 0.14
 
 func advance(delta: float, allowed: bool, transition_gain: float, interrupted: bool = false, freeze_tails: bool = false) -> void:
 	master_gain = transition_gain
+	var score_delta := delta
+	if completion_breath>0.0 and not freeze_tails:
+		score_delta = maxf(0.0,delta-completion_breath)
+		completion_breath = maxf(0.0,completion_breath-delta)
 	duck_hold = maxf(0.0,duck_hold-delta)
 	if duck_hold<=0.0:
 		duck_gain = move_toward(duck_gain,1.0,delta*0.65)
@@ -193,8 +216,9 @@ func advance(delta: float, allowed: bool, transition_gain: float, interrupted: b
 				_tween(index,1.0,0.18)
 		if completed:
 			_start_bass(false)
+	if score_delta<=0.0:return
 	# Never accumulate a burst of overdue notes after a stalled browser frame.
-	time += minf(delta,0.10)
+	time += minf(score_delta,0.10)
 	var step := int(floor(time*SCORES[night]["bpm"]/30.0))
 	for at in range(last_step+1,step+1):
 		var position := at % int(SCORES[night]["steps"])
@@ -329,4 +353,4 @@ func snapshot() -> Dictionary:
 		var curtain := master_gain if int(voice["generation"])==generation and not voice["tail"] else 1.0
 		if _active(players[index]) and not players[index].stream_paused and float(voice["gain"])*float(voice.get("return_gain",1.0))*curtain*duck_gain>0.00001:
 			audible += 1
-	return {"night":night,"pieces":pieces,"layers":active_layers.duplicate(),"complete":completed,"time":time,"enabled":enabled and not leaving,"audibleVoices":audible,"completionStarts":completion_starts,"bassEntries":bass_entries,"replies":replies,"phraseNotes":phrase_notes}
+	return {"night":night,"pieces":pieces,"layers":active_layers.duplicate(),"complete":completed,"time":time,"enabled":enabled and not leaving,"audibleVoices":audible,"completionStarts":completion_starts,"bassEntries":bass_entries,"landingNotes":landing_notes,"breathRemaining":completion_breath,"replies":replies,"phraseNotes":phrase_notes}
