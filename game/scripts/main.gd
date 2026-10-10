@@ -33,7 +33,9 @@ const WEB_SAVE_KEY = "moon-pendulum.demo8.save.v1"
 const MOON_COM = Vector2(-0.33865537,0.26339862)
 const MOON_BAIL = Vector2(-0.54,-1.03)
 const MOON_SHOULDER = Vector2(-0.55,-0.60)
-const BELL_VOICES = 12
+const BELL_VOICES = 16
+const BELL_MIX_DB = -6.0
+const BELL_REUSE_FADE = 0.035
 const INTRO_SWAY = 0.055
 const INTRO_PERIOD = 6.0
 const INTRO_HIT_RADIUS = 60.0
@@ -118,6 +120,8 @@ var audio_to: Array[float] = []
 var audio_age: Array[float] = []
 var audio_duration: Array[float] = []
 var audio_stop_after: Array[bool] = []
+var audio_elapsed: Array[float] = []
+var audio_pending: Array[Dictionary] = []
 var sounds: Array[AudioStreamWAV] = []
 var sound_banks: Array = []
 var echo_banks: Array = []
@@ -234,6 +238,8 @@ func _ready() -> void:
 		audio_age.append(0.0)
 		audio_duration.append(0.0)
 		audio_stop_after.append(false)
+		audio_elapsed.append(0.0)
+		audio_pending.append({})
 	night_music = NIGHT_MUSIC.new()
 	add_child(night_music)
 	_load_save()
@@ -801,18 +807,43 @@ func _cycle_palette() -> void:
 func _play_sample(stream: AudioStreamWAV, strength: float, base_db: float = -13.0, pitch: float = 1.0) -> void:
 	if muted or not started or paused or show_help or show_collection:
 		return
-	night_music.duck()
-	var slot := voice % BELL_VOICES
-	voice += 1
-	_play_voice(stream,strength,base_db,slot,pitch)
+	var slot := _bell_slot(base_db)
+	if slot<0:return
+	if base_db>-20.0:night_music.duck()
+	voice = slot+1
+	if players[slot].playing:
+		var already_fading := not audio_pending[slot].is_empty()
+		audio_pending[slot] = {"stream":stream,"strength":strength,"db":base_db,"pitch":pitch}
+		if not already_fading:_fade_voice(slot,0.0,BELL_REUSE_FADE,true)
+	else:
+		_play_voice(stream,strength,base_db,slot,pitch)
+
+func _bell_slot(base_db: float) -> int:
+	# A circular index alone can stop a long low bell while shorter voices are free.
+	for offset in range(BELL_VOICES):
+		var slot := (voice+offset)%BELL_VOICES
+		if not players[slot].playing and audio_pending[slot].is_empty():return slot
+	var quietest := INF
+	var chosen := -1
+	for slot in range(BELL_VOICES):
+		# Soft aiming notes never replace the tail of a struck bell.
+		if base_db<=-20.0 and audio_base[slot]>-20.0+BELL_MIX_DB:continue
+		# Conservative decay estimate uses the slowest of the three bell timbres.
+		var level := audio_base[slot]+linear_to_db(maxf(0.0001,audio_gain[slot]))-8.68589*audio_elapsed[slot]*players[slot].pitch_scale/1.13
+		if level<quietest:
+			quietest = level
+			chosen = slot
+	return chosen
 
 func _play_voice(stream: AudioStreamWAV, strength: float, base_db: float, slot: int, pitch: float = 1.0) -> void:
 	if muted or not started or paused or show_help or show_collection:
 		return
 	var player := players[slot]
+	audio_pending[slot] = {}
+	audio_elapsed[slot] = 0.0
 	player.stream = stream
 	player.pitch_scale = pitch
-	audio_base[slot] = base_db + strength*6.0
+	audio_base[slot] = base_db + strength*6.0+BELL_MIX_DB
 	audio_gain[slot] = _transition_audio_gain()
 	audio_duration[slot] = 0.0
 	audio_stop_after[slot] = false
@@ -957,6 +988,7 @@ func _fade_voice(slot: int, target: float, duration: float, stop_after: bool = f
 
 func _advance_audio_envelopes(delta: float) -> void:
 	for i in range(players.size()):
+		if players[i].playing:audio_elapsed[i] += delta
 		if audio_duration[i]<=0.0:
 			continue
 		audio_age[i] += delta
@@ -969,10 +1001,15 @@ func _advance_audio_envelopes(delta: float) -> void:
 			if audio_stop_after[i]:
 				players[i].stop()
 				audio_stop_after[i] = false
+				var pending := audio_pending[i]
+				if not pending.is_empty():
+					audio_pending[i] = {}
+					_play_voice(pending["stream"],float(pending["strength"]),float(pending["db"]),i,float(pending["pitch"]))
 
 func _stop_audio(immediate: bool = false) -> void:
 	night_music.suspend(immediate)
 	for i in range(players.size()):
+		audio_pending[i] = {}
 		if immediate:
 			players[i].stop()
 			audio_duration[i] = 0.0
@@ -1027,6 +1064,7 @@ func _request_transition(action: String, index: int = 0) -> void:
 	# Let the old score reach silence before the next night begins.
 	night_music.leave(maxf(0.001,_transition_out_seconds()-transition_time))
 	for i in range(players.size()):
+		audio_pending[i] = {}
 		if players[i].playing:
 			var duration := maxf(0.001,_transition_out_seconds()-transition_time)
 			_fade_voice(i,0.0,duration)
@@ -1341,6 +1379,7 @@ func _retry(clear_cadence: bool = true) -> void:
 	_publish_state()
 
 func _new_chapter(index: int) -> void:
+	for i in range(audio_pending.size()):audio_pending[i] = {}
 	show_collection = false
 	collection_opacity = 0.0
 	_clear_feedback()

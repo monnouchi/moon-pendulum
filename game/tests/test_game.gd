@@ -678,7 +678,7 @@ func run() -> void:
 	check(game.voice==completed_voice_count and game.progress==3,"One completed night cannot celebrate or advance twice")
 	for i in range(30):
 		game._sound(i%7,0.7)
-	check(game.night_music.players[bass_voice].stream==game.night_music.bass_stream and game.players.size()==12 and game.night_music.players.size()==16,"Rapid bell playing cannot steal musical voices or grow either pool")
+	check(game.night_music.players[bass_voice].stream==game.night_music.bass_stream and game.players.size()==16 and game.night_music.players.size()==16,"Rapid bell playing cannot steal musical voices or grow either pool")
 	game._request_transition("garden")
 	game._process(0.16)
 	check(game.night_music.players[bass_voice].playing and game.night_music.voices[bass_voice]["gain"]>0.5,"Early next action retains a gently fading completed bass")
@@ -725,7 +725,13 @@ func run() -> void:
 	game.night_music.duck()
 	game._process(1.0/60.0)
 	var level_ducked := bass_player.volume_db+AudioServer.get_bus_volume_db(AudioServer.get_bus_index(bass_player.bus))
-	check(level_ducked<level_before-1.5,"A physical bell gently lowers the continuing score's effective audio level")
+	check(absf(level_ducked-level_before)<0.01,"Completed accompaniment keeps its level when a physical bell rings")
+	game.night_music.completed = false
+	game.night_music.duck()
+	game._process(1.0/60.0)
+	var learning_duck := bass_player.volume_db+AudioServer.get_bus_volume_db(AudioServer.get_bus_index(bass_player.bus))
+	check(learning_duck<level_before and learning_duck>level_before-0.8,"An unfinished night only gives a small amount of room to a struck bell")
+	game.night_music.completed = true
 	game._process(0.80)
 	var level_recovered := bass_player.volume_db+AudioServer.get_bus_volume_db(AudioServer.get_bus_index(bass_player.bus))
 	check(absf(level_recovered-level_before)<0.01 and playback_id(bass_player)==held_playback,"The score regains its level without restarting its sustained bass")
@@ -881,24 +887,27 @@ func run() -> void:
 		check(int(harmony["bass"])%12==int(harmony["base"][0][1])%12,"Completion bass anchors the same home as the first foundation note")
 		var signature: Array = []
 		for i in range(7):
-			var slot: int = game.voice%12
+			game._stop_audio(true)
 			game._ring(i,0.5)
+			var slot: int = (game.voice-1)%game.BELL_VOICES
 			var heard_midi: float = game.HARMONY.BELL_REFERENCE[i]+12.0*log(game.players[slot].pitch_scale)/log(2.0)
 			check(absf(heard_midi-int(harmony["bells"][i]))<0.001 and game.note_label==harmony["bell_names"][i],"A real physical bell and its label use the selected night, not a global D table")
 			signature.append(int(harmony["bells"][i])-int(harmony["bells"][0]))
 		check(signature not in pitch_sets,"The night changes interval structure rather than only transposing the same seven bells")
 		pitch_sets.append(signature)
 		for side in range(2):
-			var slot: int = game.voice%12
+			game._stop_audio(true)
 			game._play_echo(side,0.5)
+			var slot: int = (game.voice-1)%game.BELL_VOICES
 			var echo_index: int = game._echo_index(side)
 			var heard_midi: float = game.HARMONY.ECHO_REFERENCE[echo_index]+12.0*log(game.players[slot].pitch_scale)/log(2.0)
 			check(absf(heard_midi-int(harmony["echoes"][echo_index]))<0.001,"A physical small moon stays inside the current night harmony")
 		game.last_pull_note = -1
 		game.pull_note_cooldown = 0.0
 		game.theta = -0.32
-		var preview_slot: int = game.voice%12
+		game._stop_audio(true)
 		game._preview_pull()
+		var preview_slot: int = (game.voice-1)%game.BELL_VOICES
 		check(absf(game.players[preview_slot].pitch_scale-float(game.bell_rates[night][2]))<0.00001,"Pull preview uses the same night pitch as the eventual physical bell")
 		var glyphs_ok := true
 		for label in harmony["bell_names"]+harmony["echo_names"]:
@@ -923,8 +932,9 @@ func run() -> void:
 	check(minor_reply_ok,"The first Dorian moon reply is C5 rather than the old global F-sharp5")
 	game._new_chapter(5)
 	for i in range(7):
-		var slot: int = game.voice%12
+		game._stop_audio(true)
 		game._sound(i,0.5)
+		var slot: int = (game.voice-1)%game.BELL_VOICES
 		check(game.players[slot].pitch_scale==1.0 and game._bell_name(i)==game.NOTE_NAMES[i],"Garden returns every reused bell voice to its original D pentatonic pitch")
 	game.muted = true
 	game.transition_phase = 0
@@ -1299,7 +1309,7 @@ func run() -> void:
 				game._physics_process(1.0/60.0)
 			check(game.casts==2 and game.progress==finished_progress and game.perfects==finished_perfects and game.best_casts==finished_best,"Completed-night improvisation retains the achievement, tally and best result")
 			check(game.cast_judged and game.night_music.completed and game.night_music.completion_starts==1 and game.finish_time>release_time and not game._completion_visual_state()["active"],"Completed-night improvisation cannot refire the award or celebration")
-			check(game.players.size()==12 and game.night_music.players.size()==16 and game.trail.size()<=115 and game.particles.size()<180 and game.echo_transfers.size()<=4,"Repeated finished-night pulls retain bounded audio and visual resources")
+			check(game.players.size()==16 and game.night_music.players.size()==16 and game.trail.size()<=115 and game.particles.size()<180 and game.echo_transfers.size()<=4,"Repeated finished-night pulls retain bounded audio and visual resources")
 		var reset_finished := InputEventKey.new()
 		reset_finished.pressed = true
 		reset_finished.keycode = KEY_R
@@ -1488,7 +1498,7 @@ func run() -> void:
 				smooth_return = smooth_return and current_gain>=previous_gain-0.000001 and current_gain<=1.0 and current_gain>=0.18-0.000001 and absf(current_gain-previous_gain)<0.04
 				previous_gain = current_gain
 			check(smooth_return and game._completion_stage_gain()==1.0,"The instrumental light returns gradually to its ordinary settled state")
-			check(game.night_music.phrase_notes>phrase_count and game.night_music.landing_notes==1 and game.players.size()==12 and game.night_music.players.size()==16,"Full accompaniment continues without extra arrivals or additional audio players")
+			check(game.night_music.phrase_notes>phrase_count and game.night_music.landing_notes==1 and game.players.size()==16 and game.night_music.players.size()==16,"Full accompaniment continues without extra arrivals or additional audio players")
 			game._enter_garden(false)
 			game.listening_resume = {"chapter":night,"casts":2,"perfects":2}
 			game._return_to_journey()
@@ -1532,6 +1542,64 @@ func run() -> void:
 	check(game.night_music.completion_breath==0.0,"Leaving during the arrival retires its short rest instead of carrying it into another night")
 	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.03)
 	check(game.chapter==1 and not game.chapter_done and game._completion_stage_gain()==1.0 and game.night_music.landing_notes==0,"A new night has its ordinary light and its own score after a interrupted arrival")
+	# Keep ringing tails alive even when the circular cursor points at a busy slot.
+	game.transition_phase = 0
+	game._stop_audio(true)
+	game.muted = false
+	game._new_chapter(0)
+	game.voice = 0
+	for index in range(16):game._sound(index%7,0.8)
+	var busy_playback := playback_id(game.players[0])
+	game.players[5].stop()
+	game.voice = 0
+	game._sound(2,0.8)
+	check(game.voice==6 and game.players[5].playing and playback_id(game.players[0])==busy_playback,"A free voice is reused without cutting the ringing bell at the cursor")
+	check(is_equal_approx(game.players[5].volume_db,-14.2),"A struck bell is six decibels softer at the actual audio player")
+	game._sound(3,0.9)
+	var fading_slot: int = (game.voice-1)%16
+	var fading_playback := playback_id(game.players[fading_slot])
+	check(not game.audio_pending[fading_slot].is_empty() and game.audio_gain[fading_slot]==1.0,"An overloaded bell request begins with the current tail rather than an immediate stop")
+	advance_for(game.BELL_REUSE_FADE*0.5)
+	check(game.audio_gain[fading_slot]>0.0 and game.audio_gain[fading_slot]<1.0 and playback_id(game.players[fading_slot])==fading_playback,"The retiring bell fades on its original playback before reuse")
+	advance_for(game.BELL_REUSE_FADE*0.5+0.002)
+	check(game.audio_pending[fading_slot].is_empty() and playback_id(game.players[fading_slot])!=fading_playback and game.players[fading_slot].stream==game.sound_banks[game.palette_index][3],"The new bell starts once after the short retirement fade")
+	var cursor_before_preview: int = game.voice
+	game.last_pull_note = -1
+	game.pull_note_cooldown = 0.0
+	game.theta = 0.32
+	game._preview_pull()
+	check(game.voice==cursor_before_preview and game.audio_pending.all(func(note):return note.is_empty()),"A soft aiming note cannot evict struck-bell tails when every voice is occupied")
+	game._sound(4,0.8)
+	check(game.audio_pending.any(func(note):return not note.is_empty()),"A saturated struck bell has one bounded pending replacement")
+	game._toggle_mute()
+	advance_for(0.1)
+	check(game.audio_pending.all(func(note):return note.is_empty()) and game.players.all(func(player):return not player.playing),"Muting cancels pending bells as well as active tails")
+	game._toggle_mute()
+	for index in range(16):game._sound(index%7,0.8)
+	game._sound(4,0.8)
+	game._request_transition("chapter",1)
+	check(game.audio_pending.all(func(note):return note.is_empty()),"Night navigation retires queued bells before fading into another score")
+	advance_for(game.TRANSITION_OUT+game.TRANSITION_QUIET+0.03)
+	game.transition_phase = 0
+	game.night_opening = false
+	for night in range(5):
+		game._stop_audio(true)
+		game._new_chapter(night)
+		game._process(0.1)
+		for goal in range(game.lit_goals.size()):game._award_goal(0.0,game._point(0.0),goal)
+		var sustained_slot := -1
+		for slot in range(16):
+			if game.night_music.voices[slot]["role"]=="bass" and game.night_music.voices[slot]["generation"]==game.night_music.generation:sustained_slot = slot
+		check(sustained_slot>=0 and game.night_music.players[sustained_slot].playback_type==AudioServer.PLAYBACK_TYPE_STREAM and game.night_music.bass_stream.loop_begin==30000 and game.night_music.bass_stream.loop_end==90000,"Every completed tonic loops its steady region in the audio mixer")
+		advance_for(0.2)
+		var sustained_player: AudioStreamPlayer = game.night_music.players[sustained_slot]
+		var sustained_playback := playback_id(sustained_player)
+		var sustained_level := sustained_player.volume_db
+		for ring in range(40):
+			game._sound(ring%7,0.8)
+			advance_for(0.02)
+		check(absf(sustained_player.volume_db-sustained_level)<0.01 and playback_id(sustained_player)==sustained_playback and game.night_music.bass_entries==1,"Repeated completed-night playing neither ducks nor restarts the sustained tonic")
+		check(game.players.size()==16 and game.night_music.players.size()==16 and game.audio_pending.size()==16,"Repeated audio requests keep fixed player and pending-note pools")
 	print("PASS: %d gameplay checks, all 11 constellation goals / 15 lights across 5 nights" % checks)
 	game.paused = true
 	game._stop_audio(true)

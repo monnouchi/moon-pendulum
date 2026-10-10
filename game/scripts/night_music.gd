@@ -149,6 +149,7 @@ func unlock(count: int, finished: bool, paired: bool = false, mask: Variant = nu
 			_note(layer,int(first[1]),float(first[2])*0.72,"reply")
 	if finished and not completed:
 		completed = true
+		duck_hold = 0.0
 		completion_starts += 1
 		completion_breath = COMPLETION_BREATH_SECONDS
 		if enabled:
@@ -184,8 +185,9 @@ func retire_landing() -> void:
 			_tween(index,0.0,0.08,"stop")
 
 func duck() -> void:
-	duck_gain = minf(duck_gain,0.72)
-	duck_hold = 0.14
+	if completed:return
+	duck_gain = minf(duck_gain,0.92)
+	duck_hold = 0.08
 
 func advance(delta: float, allowed: bool, transition_gain: float, interrupted: bool = false, freeze_tails: bool = false) -> void:
 	master_gain = transition_gain
@@ -242,7 +244,7 @@ func _start_bass(entry: bool) -> void:
 	if entry:
 		bass_entries += 1
 	var offset := 0.0 if entry else float(BASS_LOOP_BEGIN)/float(bass_stream.mix_rate)
-	# Baked tonics survive Web Sample's internal loop restart without retuning.
+	# The baked tonic keeps continuous Stream playback at its original pitch.
 	var midi: int = int(SCORES[night]["bass"])
 	var slot := _play(bass_stream,midi,midi,0.80,-10.0,"bass",offset,1.0 if entry else 0.0)
 	if not entry:
@@ -268,6 +270,9 @@ func _play(stream: AudioStreamWAV, midi: int, reference: int, strength: float, d
 	var player := players[slot]
 	player.stream_paused = false
 	player.stop()
+	# Web Sample restarts the whole bass WAV on its ended callback, including
+	# the entrance. Stream keeps its steady loop in the audio mixer instead.
+	player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM if role=="bass" else AudioServer.PLAYBACK_TYPE_DEFAULT
 	player.stream = stream
 	player.pitch_scale = pow(2.0,float(midi-reference)/12.0)
 	voices[slot] = {"generation":generation,"role":role,"base":db+linear_to_db(strength),"gain":initial_gain,"from":initial_gain,"to":initial_gain,"age":0.0,"duration":0.0,"after":"","tail":false}
