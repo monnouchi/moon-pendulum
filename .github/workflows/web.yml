@@ -56,21 +56,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p docs
-          "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --export-release Web "${GITHUB_WORKSPACE}/docs/index.html"
-          "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --script res://tests/test_web_distribution.gd -- "${GITHUB_WORKSPACE}/docs"
-          sha256sum docs/*
+          mkdir -p web-dist
+          "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --export-release Web "${GITHUB_WORKSPACE}/web-dist/index.html"
+          "Godot_v${GODOT_VERSION}-stable_linux.x86_64" --headless --path game --script res://tests/test_web_distribution.gd -- "${GITHUB_WORKSPACE}/web-dist"
+          sha256sum web-dist/*
       - name: Upload downloadable Web export
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moon-pendulum-web
-          path: docs
+          path: web-dist
           if-no-files-found: error
           retention-days: 1
       - name: Package GitHub Pages game
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
-          path: docs
+          path: web-dist
 
   deploy:
     needs: build

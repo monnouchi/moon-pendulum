@@ -32,10 +32,10 @@ godot --headless --path game --editor --import --quit
 godot --path game
 ```
 
-Web出力は`docs`フォルダを作成し、`godot --headless --path game --export-release Web ../docs/index.html`で生成します。`python3 -m http.server 8000 --directory docs`で配信できます。検証・公開の手順は[workflow](.github/workflows/web.yml)にあります。
+Web出力は`web-dist`フォルダを作成し、`godot --headless --path game --export-release Web ../web-dist/index.html`で生成します。`python3 -m http.server 8000 --directory web-dist`で配信できます。検証・公開の手順は[workflow](.github/workflows/web.yml)にあります。
 
 ## ライセンス
 
 ゲームは[MIT](LICENSE)です。フォントの著作権とライセンスは[同梱全文](game/assets/fonts/LICENSE.txt)、エンジンの通知は[Web出力処理](game/addons/web_licenses/bundle.gd)を参照してください。
 
-エディター・CLI・CIのWeb出力には`LICENSE.txt`・`FONT_LICENSE.txt`・`ENGINE_NOTICES.txt`を自動で同梱します。再配布時にもこれらを保持してください。出力の通知を検査するには`godot --headless --path game --script res://tests/test_web_distribution.gd -- ../docs`を使用します。
+エディター・CLI・CIのWeb出力には`LICENSE.txt`・`FONT_LICENSE.txt`・`ENGINE_NOTICES.txt`を自動で同梱します。再配布時にもこれらを保持してください。出力の通知を検査するには`godot --headless --path game --script res://tests/test_web_distribution.gd -- ../web-dist`を使用します。

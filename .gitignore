@@ -1,7 +1,7 @@
 .godot/
 *.tmp
 .DS_Store
-/docs/
+/web-dist/
 /game/assets/audio/*.wav
 /game/assets/audio/*.import
 /game/assets/fonts/*.ttf
